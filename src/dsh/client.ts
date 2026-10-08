@@ -12,6 +12,7 @@ import {
   classifyHttpStatus,
   describeParseFailure,
   isRpcEnvelope,
+  parseFailurePath,
   rpcErrorCode,
   rpcErrorMessage,
   type WireFailureKind,
@@ -22,6 +23,21 @@ import { isLoopbackUrl } from "../policy/trusted-input.js";
 
 /** Maximum number of `session/page` windows walked for one read. */
 const MAX_PAGE_WINDOWS = 100;
+
+/**
+ * Where a validator's JSON path sits in the wire envelope, one anchor per direction.
+ *
+ * A drift failure has to be locatable without reading the client: the request travels as
+ * `payload.args`, so a bad `request.sessionId` is `payload.args.request.sessionId` on the wire.
+ */
+const REQUEST_ANCHOR = "payload.args";
+const RESPONSE_ANCHOR = "result.value";
+
+/** Renders a validator path as a wire path; a root-level mismatch names only the anchor. */
+function wirePath(anchor: string, path: string | null): string | null {
+  if (path === null) return null;
+  return path === "(root)" ? anchor : `${anchor}.${path}`;
+}
 
 /** Per-call HTTP budget (unchanged from the pre-refactor client). */
 const RPC_TIMEOUT_MS = 15_000;
@@ -64,16 +80,30 @@ export class DshRpcError extends Error {
   public readonly method: string | null;
   /** Business error code the Host supplied, when any. */
   public readonly rpcCode: string | null;
+  /**
+   * The offending field's path inside the wire envelope, for a drift failure.
+   *
+   * Structured on purpose: `describeParseFailure` puts the same location in the message for a
+   * human, while this is what `classifyThrownFailure` re-exposes as a field.
+   */
+  public readonly path: string | null;
 
   public constructor(
     message: string,
-    options: { kind: WireFailureKind; method?: string | null; rpcCode?: string | null; cause?: unknown },
+    options: {
+      kind: WireFailureKind;
+      method?: string | null;
+      rpcCode?: string | null;
+      path?: string | null;
+      cause?: unknown;
+    },
   ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = "DshRpcError";
     this.kind = options.kind;
     this.method = options.method ?? null;
     this.rpcCode = options.rpcCode ?? null;
+    this.path = options.path ?? null;
   }
 }
 
@@ -180,7 +210,21 @@ export class DshClient {
 
   /** Calls one method, validating the request we send and the value we accept. */
   public async call<M extends MethodName>(method: M, args: ArgOf<M>, opts: { signal?: AbortSignal } = {}): Promise<ResOf<M>> {
-    METHODS[method].request.parse(args);
+    try {
+      METHODS[method].request.parse(args);
+    } catch (error) {
+      // An invalid request is also a contract mismatch, and it must name the field the same way
+      // a response drift does — a raw validator error escapes this module unclassified otherwise.
+      throw new DshRpcError(
+        `${method} failed: the request does not match the contract (${describeParseFailure(error)}).`,
+        {
+          kind: "protocol-drift",
+          method,
+          path: wirePath(REQUEST_ANCHOR, parseFailurePath(error)),
+          cause: error,
+        },
+      );
+    }
     const cookie = await this.ensureCredentials();
     const response = await this.fetchImpl(new URL(`${API_PREFIX}/${method}`, new URL(this.slots.webUrl).origin), {
       method: "POST",
@@ -219,7 +263,12 @@ export class DshClient {
       // The JSON path is the actionable part of "the contract changed" (ADR-0003 §3.2).
       throw new DshRpcError(
         `${method} failed: the Host answered with a value that drifts from the contract (${describeParseFailure(error)}).`,
-        { kind: "protocol-drift", method, cause: error },
+        {
+          kind: "protocol-drift",
+          method,
+          path: wirePath(RESPONSE_ANCHOR, parseFailurePath(error)),
+          cause: error,
+        },
       );
     }
   }

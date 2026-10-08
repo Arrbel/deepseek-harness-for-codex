@@ -3,7 +3,7 @@
 // The regression these guard is concrete: `ServiceSupervisor` used to resolve its data
 // directory from the process environment and create `services/<key>` in `start()`, before any
 // process existed. A suite that did not pass a directory wrote empty directories into the
-// user's real `~/.deepseek-harness-mcp` (see `reports/fix-test-isolation.md`).
+// user's real `~/.deep-seek-harness-mcp` (see `reports/fix-test-isolation.md`).
 //
 // Two properties are asserted: the data directory is a compile-time requirement of this layer,
 // and the injected spawn seam has no filesystem side effects at all.

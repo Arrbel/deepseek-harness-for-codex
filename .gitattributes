@@ -1,0 +1,20 @@
+# Line-ending policy (R2-8).
+#
+# Without this file every checkout produced "LF will be replaced by CRLF" warnings for ~40 files
+# on Windows, which buries real diff noise and made it impossible to tell an accidental EOL
+# rewrite from a content change. Text is normalized to LF in the repository; the working copy
+# follows the platform default.
+* text=auto eol=lf
+
+# Binary assets must never be normalized.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.exe binary
+
+# Generated payload and build output are ignored (see .gitignore) - these entries only spell out
+# that, if they are ever added explicitly, they are not text.
+plugins/** -text
+dist/** -text

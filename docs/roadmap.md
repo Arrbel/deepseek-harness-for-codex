@@ -33,7 +33,27 @@
 | R1-P1-4 | `wire.ts` 漂移结构化（method/path 进入错误对象） | ⏳ | 待分配 | `classifyThrownFailure` 不再丢结构；有断言 |
 | R1-P1-5 | `dsh:try <version>`（不改文件、临时数据目录、finally 清理） | ⏳ | 待分配 | live 测试改读 `resolveHarnessPackage(env)`；失败不污染真实数据目录 |
 | R1-P1-6 | `onEvent` 结构化日志（**只写 stderr**、单一开关、`redactDeep`）+ 耗时挂快照 | ⏳ | 待分配 | 不得污染 MCP stdio stdout；默认 off |
-| R1-P1-7 | mac 进 `check` 矩阵、`.gitattributes`、CONTRIBUTING、mermaid 架构图 | ⏳ | 待分配 | `check:live` **不进** PR 门禁 |
+| R1-P1-7 | mac 进 `check` 矩阵、`.gitattributes`、CONTRIBUTING、mermaid 架构图 | ✅ | task-23（CI）/ task-24（Lead：`.gitattributes`、CONTRIBUTING、§12 三张 mermaid 图） | `check:live` **不进** PR 门禁 |
+
+### Wave R2（P1：使用体验与可诊断性）
+
+计划与 DoD：`docs/plans/phase-r2-r4-program.md`。状态随每个 Wave 完成更新；验收方式同 R1（反向验证 + 独立验证者 + Lead 串行 `check`）。
+
+| 项 | 主题 | 状态 | 任务 | 出口判据 |
+|---|---|---|---|---|
+| R2-1 | `nextAction`（由 `reason` 单向派生，闭集 6 值）+ 失败词典 | ✅ | task-21（launch-impl，Lead 裁定后 reopen 一次） | `nextActionFor(reason)` 单点派生；`satisfies Record<ClosedFailureReason, RunAction>` 使"新增闭集 reason 忘配动作"成为**编译错误**；开放形态一律 `report-only`；词典 `docs/operations.md` §4。**两处裁定**：`turn-blocked → new-session`（在任何 step 之前被拒 → 重试对象是会话/权限，不是缩窄任务）；`turn-interrupted → report-only`（实现者去官方源码取证：`interrupted` 是崩溃恢复、修复后以 `resume` 用同一 sessionId 继续，disposal 是独立带外事件 → "换新会话"会断言未验证的事实）。4 条反向验证（兜底猜动作 12 红 / `webUrlStale` 放宽 3 红 / interrupted 2 红 / blocked 1 红）均还原并记哈希。证据：`reports/r2-actions-and-staleness.md` |
+| R2-2 | `webUrlStale` + 旧链接失效说明 | ✅ | task-21 | 仅 `failed(service-unreachable)` 为 `true`（全量穷举用例）；README 中英 + `SKILL.md` 同步"服务重启会重分配端口并轮换 token" |
+| R2-3 | 审批语义（默认 `workspace-write` → `approval: ask`） | ✅ | task-24（Lead） | **结论：不新增"待审批"字段**——会话事件词汇里没有 `approval/request`（它是 WS 上的进程内 waterfall），读路径**不可观测**；改为 `doctor.permission {mode, source, approval, advisory}`（第 19 个键，四项制不变）+ 文档 §7 + SKILL 指引。证据：`reports/r2-approval-semantics.md` |
+| R2-4 | 协议漂移结构化（`method` + JSON `path` 进错误对象） | ✅ | task-22（test-foundation） | `ClassifiedWireFailure`/`DshRpcError` 携带 `method` + `path`（`parseFailurePath` 走 cause 链，最深 4 层）；**errno 的文件系统 `path` 不与协议路径混用**（专用用例）；修正一处未分类出口——请求侧校验失败此前以裸 validator 错误逃出 `call()`，现为 `protocol-drift`。反向验证：去掉 `path` → 7 红；既有文案零改动 |
+| R2-5 | `browser.ts` 平台注入缝 + 三平台用例（V-3） | ✅ | task-22 | `browserLaunch(platform, url)` + `OpenBrowserOptions{platform?, spawnImpl?}`；`shell: false` 由运行期约定升级为**字面量类型约束**；三平台向量各一条 + 无副作用；反向验证：darwin 支改 `xdg-open` → 2 红。**该文件从"零测试引用"变为有门禁** |
+| R2-6 | `dsh:try <version>` 升级演练（不改文件、临时目录、`finally` 清理） | ✅ | task-23（dist-ssot） | 对当前 pin **真跑 PASS/exit 0**（install 52.2s/486.1MB、cold 22.5s、hot 3.8s、8 步链路、`PROTOCOL methods=7 ok=7 drift=0`）；**仓库指纹 126→126 一致、真实数据目录 absent→absent、临时目录已删**；自带指纹自检在并发写者时**如实 FAIL**（判据真实有效，`--tolerate-concurrent-writes` 可显式降级）；前置改造 `tests/e2e/live.test.ts` 改走 `resolveHarnessPackage(env)` 并反向验证（改回常量即"假工具"）。证据：`reports/r2-upgrade-drill-and-release-prep.md` + `reports/dsh-try-*.md` |
+| R2-7 | 依赖与供应链整理（`dependencies` → `devDependencies`、SBOM/audit） | ✅ | task-23 | `dependencies` 清空（SDK/zod 入 devDependencies，lock 已刷）；自包含证据：`npm pack` + `npm install --omit=dev` 的安装树**无** SDK/zod，产物仍握手出 10 工具；`npm audit --omit=dev` 0 漏洞；CI 新增独立 `supply-chain` job（audit 可见不阻塞、SBOM 离线生成并上传 artifact）。`DSH_MCP_PRUNE_VERSIONS` 归口 `config/resolve.ts`（`runtime-package.ts` 仅保留转发别名，消除重复解析——**Lead 复核后接受**，属红线文件改动，已随本轮全量重验收） |
+| R2-8 | `.gitattributes` + CONTRIBUTING + mermaid 图 | ✅ | task-24（Lead） | `.gitattributes`（`text=auto eol=lf` + 二进制例外）落地；`CONTRIBUTING.md`（写权纪律、`version:sync`↔`generated-drift` 因果、反向验证、`check`/`check:live` 边界）；`docs/architecture.md` §12 三图（组件依赖 / `start_run` 时序 / 数据与 pidfile 布局） |
+| R2-9 | CI 增 `macos-latest` 列 | ✅ | task-23 | `check.yml` 矩阵新增 `macos-latest`/node 22（覆盖 POSIX-but-not-Linux：`pgrep -P` 回退、`open` 而非 `xdg-open`、大小写不敏感路径）；`live` 仍不进 PR 门禁；**actionlint exit 0** |
+
+> **Wave R2 收口**：Lead 串行 `npm run version:sync`（消 `generated-drift`，并把 `DSH_MCP_PRUNE_VERSIONS` 加进 `.mcp.json` 白名单）+ `npm run check` **exit 0**（`Test Files 30 passed | 1 skipped (31)`、`Tests 506 passed | 1 skipped (507)`、四道门禁 OK）；独立验证见 `reports/verify-r2.md`。
+
+**R2 期间产生的新决定**：① 审批**不做**"待审批"字段（理由见 R2-3，与 C4"无公开 RPC"一致）；② 失败恢复动作只做**建议**（`nextAction`）而不自动执行（唯一例外：`auth` 换 cookie 重试一次，这是既有行为）；③ 真实 ubuntu 三列与 `tests/unit/data-location.test.ts` 在真实 POSIX 上的行为**仍属未验证**（模拟只覆盖 `process.platform` 条件维度）。
 
 评审明确**不做**的项：遥测上报、版本区间自动降级、每个 patch 版本建 fixture、`doctor --json` 新开关（`structuredContent` 已存在）、全仓 Stryker、IO 编排的属性/变异测试、`check:live` 进 PR 门禁、mac runner 跑 live、自动缩窄重试、交互式审批（无公开 RPC）、keychain 凭据、独立 RELEASING.md。**独立验证后新增的不做项**：为 `ServiceSnapshot` 增加 `orphan` 字段（`doctor.orphans` 已是该可观察面，扩快照属外部契约变更、收益不足）；"停止后保留 `dsh.pid` 并标 `stoppedAt`"（经评估**不关闭**"遗留孤儿无 pidfile 无法归属"这一残余风险，故不加状态）。
 

@@ -8,25 +8,121 @@
 //   turn/end{kind:'error'} → run converges to `failed` → stop → port released.
 //
 // Always point DSH_MCP_DATA_DIR at a scratch directory: the user's real
-// `~/.deepseek-harness-mcp` must not be touched.
+// `~/.deep-seek-harness-mcp` must not be touched.
+//
+// The spec under test comes from `resolveHarnessPackage(env)`, i.e. from `DSH_MCP_HARNESS_PACKAGE`
+// (a compile-time constant here would make `npm run dsh:try -- <version>` a no-op and would
+// silently ignore `.github/workflows/live-smoke.yml`'s `dsh_package` input). When
+// `DSH_MCP_PROTOCOL_REPORT` names a path, every wire-contract method is additionally called once
+// against the live Host and its per-method parse outcome is written there — that JSON becomes the
+// drift section of the `dsh:try` drill report. Without the variable nothing extra runs.
 
 import { existsSync } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { RunManager } from "../support/manager.js";
-import { DEFAULT_HARNESS_PACKAGE } from "../../src/config/resolve.js";
+import { resolveHarnessPackage } from "../../src/config/resolve.js";
+import { DshClient, DshRpcError } from "../../src/dsh/client.js";
+import type { MethodName } from "../../src/dsh/contract.js";
+import { describeParseFailure } from "../../src/dsh/wire.js";
 import { resolveNpmCli } from "../../src/service/npm-cli.js";
 import { directorySizeSync, ensureRuntimePackage } from "../../src/service/runtime-package.js";
 import "../support/isolation.js";
 
 const live = process.env.DSH_LIVE === "1";
+/**
+ * The runtime under test. Always from the environment: a compile-time constant here would make
+ * `npm run dsh:try -- <version>` (which only exports `DSH_MCP_HARNESS_PACKAGE`) a no-op, and
+ * would silently ignore the `dsh_package` input of `.github/workflows/live-smoke.yml`.
+ */
+const spec = resolveHarnessPackage(process.env);
+/** When set, the per-method contract probe runs and writes its outcome to this path. */
+const protocolReportPath = process.env.DSH_MCP_PROTOCOL_REPORT?.trim() || null;
 const dataDir = process.env.DSH_MCP_DATA_DIR ?? join(tmpdir(), `dsh-live-${randomUUID().slice(0, 8)}`, "data");
 const root = dirname(dataDir);
 const workspace = join(root, "ws");
 const INVALID_PORTS: number[] = [];
+
+/** One `METHODS` entry as the probe observed it. */
+interface ProtocolProbeResult {
+  readonly method: MethodName;
+  readonly ok: boolean;
+  readonly ms: number;
+  /** `<json.path>: <message>` when the response drifted, otherwise `null`. */
+  readonly drift: string | null;
+  readonly failureKind: string | null;
+  readonly error: string | null;
+}
+
+/**
+ * Calls every method of the wire contract once and records the parse outcome of each.
+ *
+ * Deliberately non-throwing: the point is the *report*, so one drifting method must not hide
+ * the state of the other six (`npm run dsh:try` turns this into the drill's drift section).
+ */
+async function probeProtocol(webUrl: string, serviceId: string): Promise<ProtocolProbeResult[]> {
+  const results: ProtocolProbeResult[] = [];
+  const client = new DshClient({ serviceId, credentialSlots: { webUrl, cookie: null, pending: null } });
+  const record = async (method: MethodName, call: () => Promise<unknown>): Promise<unknown> => {
+    const started = Date.now();
+    try {
+      const value = await call();
+      results.push({ method, ok: true, ms: Date.now() - started, drift: null, failureKind: null, error: null });
+      return value;
+    } catch (error) {
+      const rpc = error instanceof DshRpcError ? error : null;
+      results.push({
+        method,
+        ok: false,
+        ms: Date.now() - started,
+        drift: rpc?.kind === "protocol-drift" ? describeParseFailure(rpc.cause) : null,
+        failureKind: rpc?.kind ?? "unclassified",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  };
+
+  const createdWorkspace = (await record(
+    "workspace/create",
+    async () => await client.call("workspace/create", { request: { path: workspace } }),
+  )) as { workspace: { workspaceId: string } } | null;
+  const workspaceId = createdWorkspace?.workspace.workspaceId ?? null;
+  const createdSession = workspaceId === null
+    ? null
+    : ((await record(
+        "session/create",
+        async () => await client.call("session/create", { request: { workspaceId } }),
+      )) as { sessionId: string } | null);
+  const sessionId = createdSession?.sessionId ?? null;
+
+  await record("session/list", async () => await client.call("session/list", { _request: {} }));
+  const projections = sessionId === null
+    ? null
+    : await record("session/projections", async () =>
+        await client.call("session/projections", { request: { sessionId } }));
+  if (sessionId !== null) {
+    const throughSeq = (projections as { asOfSeq?: number } | null)?.asOfSeq ?? -1;
+    await record("session/page", async () =>
+      await client.call("session/page", {
+        request: { address: { kind: "session", sessionId }, throughSeq, maxMessages: 100 },
+      }));
+    await record("session/prompt", async () =>
+      await client.call("session/prompt", {
+        request: {
+          requestId: `mcp-probe-${randomUUID()}`,
+          sessionId,
+          mode: "queue",
+          content: [{ type: "text", text: "dsh:try protocol probe (no API key expected)" }],
+        },
+      }));
+    await record("session/cancel", async () => await client.call("session/cancel", { request: { sessionId } }));
+  }
+  return results;
+}
 
 function log(line: string): void {
   process.stdout.write(`[live-smoke] ${line}\n`);
@@ -70,13 +166,14 @@ describe.runIf(live)("live DSH smoke (ADR-0002 launch vector)", () => {
       log(`dataDir=${dataDir}`);
       log(`workspace=${workspace}`);
       log(`npmCli=${npmCli.path} (${npmCli.source})`);
-      log(`spec=${DEFAULT_HARNESS_PACKAGE}`);
+      log(`spec=${spec}`);
+      log(`protocolReport=${protocolReportPath ?? "(disabled)"}`);
 
       // Phase 1 — one-off install into <dataDir>/versions/<version>.
       const installStart = Date.now();
       const ensured = await ensureRuntimePackage({
         dataDir,
-        spec: DEFAULT_HARNESS_PACKAGE,
+        spec,
         npmCli: npmCli.path,
         timeoutMs: 900_000,
         onProgress: (line) => log(`npm: ${line}`),
@@ -91,7 +188,7 @@ describe.runIf(live)("live DSH smoke (ADR-0002 launch vector)", () => {
       const reuseStart = Date.now();
       const reused = await ensureRuntimePackage({
         dataDir,
-        spec: DEFAULT_HARNESS_PACKAGE,
+        spec,
         npmCli: npmCli.path,
         timeoutMs: 900_000,
       });
@@ -136,6 +233,24 @@ describe.runIf(live)("live DSH smoke (ADR-0002 launch vector)", () => {
       expect(finished.status).toBe("failed");
       expect(finished.error ?? "").toMatch(/no API key|MISSING_CREDENTIAL/u);
       expect(finished.error ?? "").not.toMatch(/token=/u);
+
+      // Phase 5 (opt-in) — per-method contract probe against the same live Host. Runs after
+      // the run converged so it cannot interfere with the chain above.
+      if (protocolReportPath !== null) {
+        const probe = await probeProtocol(hot.webUrl!, hot.serviceId);
+        const drifted = probe.filter((entry) => entry.drift !== null);
+        const failed = probe.filter((entry) => !entry.ok);
+        log(`PROTOCOL methods=${String(probe.length)} ok=${String(probe.length - failed.length)} drift=${String(drifted.length)}`);
+        for (const entry of probe) {
+          log(`PROTOCOL ${entry.ok ? "ok  " : "FAIL"} ${entry.method} ${String(entry.ms)}ms${entry.drift === null ? "" : ` drift=${entry.drift}`}`);
+        }
+        await mkdir(dirname(protocolReportPath), { recursive: true });
+        await writeFile(
+          protocolReportPath,
+          `${JSON.stringify({ spec, probedAt: new Date().toISOString(), methods: probe }, null, 2)}\n`,
+          "utf8",
+        );
+      }
 
       const stoppedHot = await manager.stopService(hot.serviceId);
       log(`STOP-HOT status=${stoppedHot.status} stopUnconfirmed=${String(stoppedHot.stopUnconfirmed)}`);

@@ -44,9 +44,9 @@ codex plugin add deepseek-harness@deepseek-harness-for-codex
 
 先跑 `doctor`（MCP 工具），它报告：本服务版本、Node 引擎是否满足、npm CLI 路径与是否存在、运行时包是否已安装及其版本/路径/占用、数据目录（`{path, source, exists, writable}`）、工作区策略、代理相关环境变量、以及被忽略的废弃变量。
 
-**`doctor` 的顶层字段（18 个，与 README 中英由门禁双向锁定）**：`ready`、`problems`、`version`、`engines`、`nodeVersion`、`nodeSupported`、`platform`、`architecture`、`npmCli`、`runtimePackage`、`harnessPackage`、`dataDirectory`、`proxy`、`deprecatedEnv`、`apiKeyInEnvironment`、`allowedWorkspaceRoots`、`orphans`、`surface`。其中 `problems` 是"未满足前置条件 + 修法"的字符串数组，`dataDirectory` 是 `{path, source, exists, writable}`，`runtimePackage` 是 `{spec, installed, version, root, binPath, diskBytes, error}`，`orphans` 是 `{pid, port, serviceHome, state}[]`（`state ∈ {alive, unverified, stale-pidfile}`，存在孤儿只追加**提示性** `problems`，不翻转 `ready`），`proxy` 只报告环境变量（`env`/`noProxy`），`deprecatedEnv` 列出已废弃但仍被设置的变量（例如 `DSH_MCP_NPX_COMMAND`）。新增字段若未同步 README/本文档，门禁会以 `tool-surface-drift` / 文档一致性断言报红。
+**`doctor` 的顶层字段（19 个，与 README 中英由门禁双向锁定）**：`ready`、`problems`、`version`、`engines`、`nodeVersion`、`nodeSupported`、`platform`、`architecture`、`npmCli`、`runtimePackage`、`harnessPackage`、`dataDirectory`、`proxy`、`deprecatedEnv`、`apiKeyInEnvironment`、`allowedWorkspaceRoots`、`orphans`、`permission`、`surface`。其中 `problems` 是"未满足前置条件 + 修法 + 提示性说明"的字符串数组，`dataDirectory` 是 `{path, source, exists, writable}`，`runtimePackage` 是 `{spec, installed, version, root, binPath, diskBytes, error}`，`orphans` 是 `{pid, port, serviceHome, state}[]`（`state ∈ {alive, unverified, stale-pidfile}`，存在孤儿只追加**提示性** `problems`，不翻转 `ready`），`permission` 是 `{mode, source, approval, advisory}`（见 §7），`proxy` 只报告环境变量（`env`/`noProxy`），`deprecatedEnv` 列出已废弃但仍被设置的变量（例如 `DSH_MCP_NPX_COMMAND`）。新增字段若未同步 README/本文档，门禁会以 `tool-surface-drift` / 文档一致性断言报红。
 
-**`doctor.ready` 的判据（四项制）**：`ready = problems.length === 0`，其中 `problems` 覆盖四类前置条件——① Node 在引擎区间内；② npm CLI 可解析且存在（必须是 `npm-cli.js` 的绝对路径，不能指向 `npm.cmd`）；③ 数据目录可写（`dataDirectory.writable !== "no"`）；④ 运行时 spec 合法（`DSH_MCP_HARNESS_PACKAGE` 必须是精确版本）。`problems` 是字符串数组，每项一条"未满足的前置条件 + 可操作修法"，`ready=true` 时为空数组。`dataDirectory` 的可写性是**真实探测**：只在目录**已存在**时"建临时文件→删除"，目录不存在时返回 `exists=false, writable="unknown"` 并提示"首跑安装时创建"——**探测本身绝不创建目录**（这条是 D-07 缺陷的教训：任何顺手建目录的行为都可能写到用户真实 home）。
+**`doctor.ready` 的判据（四项制，语义不扩大）**：`ready` 只由**四项前置条件**决定——① Node 在引擎区间内；② npm CLI 可解析且存在（必须是 `npm-cli.js` 的绝对路径，不能指向 `npm.cmd`）；③ 数据目录可写（`dataDirectory.writable !== "no"`）；④ 运行时 spec 合法（`DSH_MCP_HARNESS_PACKAGE` 必须是精确版本）。`problems` 是字符串数组：**前置条件失败项 + 可操作的提示性条目**（当前唯一会追加提示的是**残留孤儿服务**——权限模式的提示**不在** `problems` 里，而是在 `permission.advisory`，因此它连 `problems` 都不会碰）。因此 `ready=true` 时 `problems` **可能非空**——判读请只看 `ready` 与前四类条目，不要用 `problems.length` 反推可用性。`dataDirectory` 的可写性是**真实探测**：只在目录**已存在**时"建临时文件→删除"，目录不存在时返回 `exists=false, writable="unknown"` 并提示"首跑安装时创建"——**探测本身绝不创建目录**（这条是 D-07 缺陷的教训：任何顺手建目录的行为都可能写到用户真实 home）。
 
 **运行结果怎么读**（`get_run`/`wait_run`/`list_runs`/`start_run`/`cancel_run` 返回的 `RunSnapshot`）：
 
@@ -56,10 +56,28 @@ codex plugin add deepseek-harness@deepseek-harness-for-codex
 | `reason` | `failed` 时的失败原因：`auth` \| `transport` \| `service-unreachable` \| `protocol-drift` \| `rpc:<code>` \| `turn-blocked` \| `turn-truncated` \| `turn-aborted:<cause>` \| `turn-interrupted` \| `turn-unknown:<kind>`；非 `failed` 时为 `null` |
 | `error` | `failed` 时的可读文本（含 `(code: X)`）；`succeeded`/`cancelled` 为 `null` |
 | `cancelRequested` | 本地是否已请求取消 |
+| `nextAction` | **由 `reason` 单向派生**的建议动作（闭集 6 值，见下表）；非 `failed` 时为 `none`。它是**建议**：本服务只自动执行其中唯一安全的一种（`auth` 换 cookie 重试一次） |
+| `webUrlStale` | `true` 表示本次失败是 `service-unreachable`——**旧链接与旧 token 已失效**，恢复后必须重新 `start_service` 取新链接 |
 | `finishedAt` | 终态写入时间；`running` 时为 `null` |
 | 其余 | `runId`/`serviceId`/`sessionId`/`sessionReused`/`task`/`workspace`/`webUrl`/`startedAt`/`lastEventSeq`/`assistantText` |
 
 判读规则：**以 `status`/`reason` 为准，不要以"有没有 error 文本"判断失败**。`blocked`（回合被拒）与 `max-tokens`（输出被截断）都是 `failed`，不会伪装成 `succeeded`；`service-unreachable` 表示服务已死（用 `doctor` + 重新 `start_service` 恢复）；`protocol-drift` 表示 DSH 版本与适配层不匹配（**不要重试**，把方法与 JSON 路径报给维护者）；`cancelled` 是用户主动取消，不当失败上报。
+
+**失败词典（`reason` → `nextAction` → 建议动作）**：开放形态（`rpc:*`、`turn-aborted:*`、`turn-unknown:*`）**一律** `report-only`——这类原因的具体语义未知，猜一个"重试"或"换会话"会把不确定性变成错误动作。
+
+| `reason` | `nextAction` | 建议动作 |
+|---|---|---|
+| `auth` | `relogin` | 本服务已自动重换 cookie 一次；仍失败说明启动链接失效 → 重新 `start_service` 取新链接 |
+| `transport` | `restart-service` | 传输层失败（已退避重试 ≤3 次）→ 确认服务仍在运行，必要时 `stop_service` + `start_service` |
+| `service-unreachable` | `restart-service` | 服务进程已死 → 重新起服务；注意此时 `webUrlStale=true`，旧链接不可再用 |
+| `protocol-drift` | `report-only` | **不重试**：DSH 版本或协议形状变了 → 报出错误里的方法名 + JSON 路径 |
+| `rpc:<code>` | `report-only` | 服务端返回的其它 RPC 错误 → 报告原始码与消息 |
+| `turn-blocked` | `new-session` | 回合在执行任何 step 前被拒 → 新会话重试，并补足约束（含权限模式，见 §7） |
+| `turn-truncated` | `retry-narrower` | 输出达到 token 上限被截断 → **缩窄任务范围**再试；本服务**不自动**改 prompt（静默改变任务语义比失败更糟） |
+| `turn-aborted:<cause>` | `report-only` | 被取消/父级终止等 → 报告具体 cause |
+| `turn-interrupted` | `report-only` | 回合被中断（转向/接管等）→ 报告，由调用方决定是否新会话 |
+| `turn-unknown:<kind>` | `report-only` | 从未见过的终态 → 报告原始 kind |
+| 非 `failed`（`running`/`succeeded`/`cancelled`） | `none` | — |
 
 | 症状 | 可能原因 | 处置 |
 |---|---|---|
@@ -86,6 +104,7 @@ codex plugin add deepseek-harness@deepseek-harness-for-codex
 |---|---|---|
 | **CI 门禁（默认，每个 PR）** | GitHub Actions `check.yml` | `windows-latest` 与 `ubuntu-latest` 上矩阵跑 `npm ci && npm run check`；Node 覆盖 22 与 24；失败即红 |
 | **CI 门禁（手动）** | GitHub Actions `live-smoke.yml` | 仅手动触发：真实安装精确版 DSH + 启动 + 无 key 的 `turn/end` 失败路径；需网络与约 486 MB 磁盘，**失败不阻塞合并**（信息性）。该 workflow **故意不预建** `DSH_MCP_DATA_DIR`（`<workspace>\.verify-scratch\live-data`），以便让"首次运行创建数据目录"这条真实路径每次都在干净 runner 上被覆盖 |
+| **CI 供应链（独立作业）** | GitHub Actions `check.yml` 的 `supply-chain` job | 与 `check` 矩阵**分开**，以保住 `check` 的"仅 `npm ci` 联网"密闭性。`npm audit --omit=dev --audit-level=high` 标 `continue-on-error`（可见**不阻塞**）；离线 `npm sbom --sbom-format=cyclonedx` 上传 artifact，该步**可以**让这个作业转红（lockfile 描述不出依赖属真实打包回归，是有意为之） |
 | 类型/单测/契约/集成 + 元数据门禁 + 自包含探针 | `npm run check` | exit 0 |
 | 打包内容 | `npm pack --dry-run` | 含 `dist/`、`.codex-plugin/`、`.mcp.json`、`skills/`、README、LICENSE |
 | 插件载荷一致性 | `npm run check-metadata` | `OK (single source of truth: package.json@<ver>)` |
@@ -111,3 +130,32 @@ codex plugin add deepseek-harness@deepseek-harness-for-codex
 - 会话记录保存在 `<数据目录>/services/<workspace-hash>/`（DSH 自己的格式），属本机数据，不上传；项目自身不额外收集遥测（子进程遥测默认关闭）。
 - 启动链接含本机 bearer token：只应出现在你与 Codex 的会话中；日志与错误输出已脱敏。
 - API Key 只经环境变量或工作区 `.env` 传入 DSH，本项目不落盘、不写入会话记录。
+
+## 7. 审批与权限模式（为什么任务会"停在 running"）
+
+**事实**（来自 Harness 自身，不是本项目的假设）：`packages/bundle/base/cordis.patch.yml` 定义了
+
+```yaml
+permission:  mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
+approval:    policy: !!js "(process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask'"
+presets:     workspace-write: { sandbox: workspace-write, approval: ask }
+```
+
+也就是说：**默认（`workspace-write`）会 `ask`**——凡需要写文件/执行命令的动作，Harness 先弹审批，而审批是 **gateway WS 流上的进程内 waterfall 事件（`approval/request`）**，浏览器里的 `ui-approval` 才能回答它。
+
+**因此本项目的能力边界（如实）**：
+
+- MCP 面**没有任何审批通道**：`session/page` 的会话事件词汇只有 `turn/start`、`step/start`、`assistant/message`、`tool/call`、`tool/result`、`step/end`、`turn/end`——**`approval/request` 不写入会话日志**，读路径里"等待审批"没有一等信号。
+- 唯一的形态相似物是"存在未配对的 `tool/call`（有调用、无结果）"，但它与"工具慢""进程已死"**不可区分**，所以本项目**不新增字段去猜**（猜出来的字段比没有更糟）。
+- 结论：**任务是"真的在跑"还是"在等你点批准"，只能由 Harness 页面回答**。这也是 `doctor.permission.advisory` 存在的意义：让你在起服务之前就知道会发生什么。
+
+**操作指引**
+
+| 情形 | 怎么做 |
+|---|---|
+| 卡片长时间 `running`、`assistantText` 不再增长 | 打开 Harness 页面看是否有审批卡片；批准后同一会话继续（`get_run`/`wait_run` 会看到新事件） |
+| 想避免人工介入（受控环境） | 显式 `DSH_PERMISSION_MODE=danger-full-access`（`doctor.permission.approval` 会变成 `never`，`advisory` 为 `null`） |
+| 只读审查类任务 | `DSH_PERMISSION_MODE=read-only`：不需要写权限，通常不会触发审批 |
+| 判断当前会怎样 | `doctor.permission = { mode, source, approval, advisory }`：`source=default` 表示"不是你设的，是默认值"；`advisory` 非空时逐字读它 |
+
+> 本项目**不会**替用户批准权限请求，也**不会**把它包装成自动重试：静默批准等于把"用户授权"这件事悄悄删掉（这是 ADR-0003 的同一原则——宁可显式失败，不做猜测）。

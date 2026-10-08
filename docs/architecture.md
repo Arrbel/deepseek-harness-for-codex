@@ -252,3 +252,114 @@ pending ──accepted──> running ──┬──> succeeded
 - 直接 `node <bin>` 启动意味着我们自己负责版本目录与安装失败诊断；换来的是确定性、离线复用、无 shell、浅进程树（见 ADR-0002）。
 - 契约校验会在 DSH 漂移时**fail-fast**，而不是尽力兼容；这是有意的：宁可明确失败，也不要静默假成功。
 - 运行态仍不跨 MCP 进程恢复（非目标）；如果需要，应按 relay 的持久标识 + 对账模型单独立项，而不是在本项目里逐步加补丁。
+
+---
+
+## 12. 全景图（组件、时序、数据布局）
+
+> 本节是 R2-8 补的**单页导览**：三张图对应"谁依赖谁"、"一次 `start_run` 到底发生了什么"、"磁盘上留下了什么"。
+> 文字规范仍是 §2（分层）、§3（状态机）、§4（启动向量）、§6（安全模型）。
+
+### 12.1 组件与依赖方向（只允许向下依赖）
+
+```mermaid
+flowchart TB
+    subgraph client["调用方"]
+        CX["Codex / 任何 MCP 客户端"]
+        BR["浏览器（Harness 页面）"]
+    end
+
+    subgraph mcp["本服务进程（stdio MCP）"]
+        BIN["bin.ts<br/>组合根：解析 env → 组装容器"]
+        TOOLS["tools/**<br/>10 个 MCP 工具 + catalog（唯一事实来源）"]
+        RUN["run/**<br/>Orchestrator + RunRegistry + 状态机"]
+        SVC["service/**<br/>Supervisor（服务生命周期）"]
+        LAN["service/launch.ts<br/>启动向量：process.execPath + bin.js"]
+        PT["service/process-tree.ts<br/>可证明的回收"]
+        RP["service/runtime-package.ts<br/>本地安装 + prune"]
+        DSH["dsh/**<br/>协议客户端 wire/client/events"]
+        POL["policy/** + config/**<br/>纯策略：spec、路径、孤儿身份"]
+        DIAG["diagnostics/doctor.ts<br/>只报告不安装"]
+        UTIL["util/redaction.ts<br/>唯一脱敏出口"]
+    end
+
+    subgraph child["Harness 子进程"]
+        HW["node <versions/X/lib/bin.js> web --no-open --port 0"]
+    end
+
+    CX -->|"stdio JSON-RPC"| BIN
+    BIN --> TOOLS
+    TOOLS --> RUN
+    RUN --> SVC
+    SVC --> LAN
+    LAN -->|"spawn(shell:false, detached on POSIX)"| HW
+    SVC --> PT
+    SVC --> RP
+    RUN --> DSH
+    DSH -->|"HTTP /api（unary）+ WS mux"| HW
+    BR -->|"/?token=… → cookie"| HW
+    SVC --> POL
+    RP --> POL
+    DIAG --> POL
+    TOOLS --> DIAG
+    UTIL -.->|"所有外向文本"| TOOLS
+```
+
+**方向纪律**：`dsh/`、`service/`、`run/`、`tools/` 逐层向上；`policy/`、`config/`、`util/` 是**叶子**（不 import 上层），由 `tests/module-boundaries.test.ts` 与 `tests/unit/layering.test.ts` 实跑断言。
+
+### 12.2 一次 `start_run` 的时序（含失败口径）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Codex
+    participant O as Orchestrator
+    participant S as Supervisor
+    participant H as Harness 子进程
+    participant P as 浏览器
+
+    C->>O: start_run {task, workspace, sessionId?}
+    O->>S: ensureService(workspace)
+    alt 运行时包未安装
+        S->>S: ensureRuntimePackage()（预算 900s，一次性）
+    end
+    S->>S: 对账 dsh.pid（身份可证才回收；否则 unverified 不杀）
+    S->>H: spawn(process.execPath, [bin,'web','--no-open','--port','0'])
+    H-->>S: stdout: "dsh web: http://127.0.0.1:PORT/?token=…"
+    S->>S: 写 dsh.pid（含真实端口）
+    O->>H: GET /?token=… → 303 + Set-Cookie（只换一次）
+    O->>H: POST /api/session.list|session.create（workspace 归属必须可证）
+    O->>H: POST /api/session.prompt / turn 启动
+    H-->>O: 会话事件（轮询 session/page）：turn/start → step/start → assistant/message → tool/* → turn/end
+    alt turn/end.reason.kind == completed
+        O->>O: settle(succeeded)
+    else error / blocked / max-tokens
+        O->>O: settle(failed, reason + nextAction)，绝不当成功
+    else 服务在过程中死亡
+        O->>O: settle(failed, service-unreachable, webUrlStale=true)
+    end
+    O-->>C: RunSnapshot {status, reason, nextAction, assistantText, webUrl, …}
+    P->>H: 用户在页面点批准（approval/request 只在 WS 上，不进会话日志）
+```
+
+**几个"为什么不"**：① 审批没有 MCP 通道，所以 `running` 时**不猜**是"在等批准"还是"在跑"（见 `docs/operations.md` §7）；② `protocol-drift` 不重试（`nextAction=report-only`）；③ 无 `turn/end` 一律 fail-closed，不写"成功"。
+
+### 12.3 磁盘布局（哪些是状态，哪些是证据）
+
+```mermaid
+flowchart LR
+    subgraph DD["数据目录（DSH_MCP_DATA_DIR，默认 ~/.deep-seek-harness-mcp）"]
+        V["versions/<br/>运行时包（每个约 486 MB）"]
+        VT["versions/.tmp-*<br/>安装暂存（超期回收）"]
+        VL["versions/.install.lock<br/>并发安装锁"]
+        SH["services/&lt;workspace-hash&gt;/<br/>DSH_HOME（会话数据，DSH 自己管理）"]
+        PID["services/&lt;hash&gt;/dsh.pid<br/>{pid, port, binPath, startedAt}<br/>证据，不是配置：身份不可证则不杀"]
+        LG["logs/<br/>(尚未创建：R3-2 的漂移遥测才会落盘)"]
+    end
+    PRUNE["prune：只删「非当前 pin 且未被在用服务引用」的版本目录"]
+    V -.-> PRUNE
+    VT -.-> PRUNE
+    PRUNE -->|"证据不可读/身份不可证 → 该轮一个版本目录都不删"| V
+```
+
+`dsh.pid` 是**唯一的进程证据**：`alive`（命令含我们的 `bin.js` 与 `--port`）→ `start_service` 会回收；`unverified`（进程活着但身份不可证）→ **永不按 pid 盲杀**（PID 复用会误杀别人的进程）；`stale-pidfile`（进程已退出或文件损坏）→ 仅作为提示出现在 `doctor.orphans`，不阻塞 `ready`。

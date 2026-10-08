@@ -138,6 +138,41 @@ function npmProblem(env: NodeJS.ProcessEnv): string {
   }
 }
 
+/** What the next Harness child will use for permissions, and what that means for the user. */
+export interface PermissionReport {
+  /** Effective `DSH_PERMISSION_MODE` passed to the child. */
+  mode: string;
+  /** `env` when the caller set it, `default` when the DSH default applies. */
+  source: "env" | "default";
+  /** The approval policy that mode maps to inside DSH. */
+  approval: "ask" | "never";
+  /** Non-null when the user must be told that a turn may wait for a click. */
+  advisory: string | null;
+}
+
+/** The DSH default when `DSH_PERMISSION_MODE` is unset (mirrors the bundle's own default). */
+export const DEFAULT_PERMISSION_MODE = "workspace-write";
+
+/**
+ * Reports the permission mode **without** spawning anything.
+ *
+ * The mapping is copied from the Harness bundle it describes —
+ * `packages/bundle/base/cordis.patch.yml`: `mode: process.env.DSH_PERMISSION_MODE ?? 'workspace-write'`
+ * and `policy: … === 'danger-full-access' ? 'never' : 'ask'`. It is reported (never enforced) so a
+ * user can see *before* starting a run that an approval click will be required; the field is
+ * deliberately **not** a prerequisite, so it can never change `ready`.
+ */
+export function permissionReport(env: NodeJS.ProcessEnv = process.env): PermissionReport {
+  const configured = env.DSH_PERMISSION_MODE?.trim() ?? "";
+  const mode = configured === "" ? DEFAULT_PERMISSION_MODE : configured;
+  const source = configured === "" ? "default" : "env";
+  const approval = mode === "danger-full-access" ? "never" : "ask";
+  const advisory = approval === "ask"
+    ? `Harness will ask for approval (permission mode \`${mode}\`) before actions that need it, and this MCP server cannot answer that prompt: a turn that needs approval waits until somebody approves it in the Harness page. Open the page, or set DSH_PERMISSION_MODE=danger-full-access in a controlled environment.`
+    : null;
+  return { mode, source, approval, advisory };
+}
+
 /** The already-resolved facts `problems` is derived from (explicit, so each branch is testable). */
 export interface PrerequisiteInputs {
   nodeVersion: string;
@@ -150,10 +185,11 @@ export interface PrerequisiteInputs {
 /**
  * The prerequisites that are not satisfied, each with its own fix.
  *
- * `problems` is deliberately the **only** input of `ready` (empty ⇔ ready): a `ready=false` that
- * does not explain itself forces the caller to guess which of several fields is the cause, which
- * is exactly the over-optimism/silence pair this phase removes. `runtimePackage.error` stays as
- * the detail layer.
+ * These are the **only** input of `ready` (`prerequisites.length === 0` ⇔ ready): a `ready=false`
+ * that does not explain itself forces the caller to guess which of several fields is the cause.
+ * The returned array is composed with advisory entries (a leftover pidfile) into the report's
+ * `problems`, so `problems` may be non-empty while `ready` is true — never infer readiness from
+ * `problems.length`. `runtimePackage.error` stays as the detail layer.
  */
 export function prerequisiteProblems(env: NodeJS.ProcessEnv, parts: PrerequisiteInputs): string[] {
   const problems: string[] = [];
@@ -229,6 +265,7 @@ export function inspectRuntime(env: NodeJS.ProcessEnv = process.env): Record<str
     apiKeyInEnvironment: Boolean(env.DEEPSEEK_API_KEY?.trim()),
     allowedWorkspaceRoots: resolveAllowedRoots(env),
     orphans,
+    permission: permissionReport(env),
     surface: "web",
   };
 }

@@ -34,6 +34,19 @@ export interface RunSnapshot {
   status: RunStatus;
   /** Set exactly when the run settled as `failed`; `null` for `succeeded`/`cancelled`. */
   reason: FailureReason | null;
+  /**
+   * The next action a caller should take, derived from `reason` **alone** (see `run/state.ts`).
+   *
+   * Deliberately a closed six-value set and one-directional: nothing here may be re-derived from
+   * the client's situation, so reading the field can never produce a guess. `reason === null`
+   * (running/succeeded/cancelled) yields `none`.
+   */
+  nextAction: RunAction;
+  /**
+   * True **only** for `failed(service-unreachable)`: the service that served `webUrl` died, and a
+   * restart both moves the port and rotates the launch token, so the old link is dead.
+   */
+  webUrlStale: boolean;
   cancelRequested: boolean;
   startedAt: string;
   finishedAt: string | null;
@@ -41,6 +54,20 @@ export interface RunSnapshot {
   lastEventSeq: number;
   error: string | null;
 }
+
+/**
+ * The closed set of next actions a snapshot may recommend.
+ *
+ * Closed on purpose: an open failure reason cannot name a specific fix, so it maps to
+ * `report-only` rather than to a plausible-looking guess.
+ */
+export type RunAction =
+  | "retry-narrower"
+  | "new-session"
+  | "restart-service"
+  | "relogin"
+  | "report-only"
+  | "none";
 
 /** Inputs needed to start a visible Harness task. */
 export interface StartRunInput {

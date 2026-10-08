@@ -206,7 +206,8 @@ export const TOOLS: readonly ToolSpec[] = [
   {
     name: "get_run",
     title: "Read a DeepSeek Harness run",
-    description: "Read the current state and assistant response from the same Harness Web session shown to the user.",
+    description:
+      "Read the current state and assistant response from the same Harness Web session shown to the user. When the run failed, `nextAction` names the one recovery step and `webUrlStale` says whether the `webUrl` link still works.",
     input: getRunShape,
     behavior: "read-only",
     result: "run",
@@ -216,7 +217,7 @@ export const TOOLS: readonly ToolSpec[] = [
     name: "wait_run",
     title: "Wait for DeepSeek Harness output",
     description:
-      "Poll the visible Harness Web session for up to 30 seconds and return its current status, failure reason, and assistant response. Safe to call repeatedly (no side effects): a finished run keeps returning the same terminal snapshot, and a timeout returns the current snapshot instead of failing.",
+      "Poll the visible Harness Web session for up to 30 seconds and return its current status, failure reason, `nextAction`, and assistant response. Safe to call repeatedly (no side effects): a finished run keeps returning the same terminal snapshot, and a timeout returns the current snapshot instead of failing.",
     input: waitRunShape,
     behavior: "read-only",
     result: "run",

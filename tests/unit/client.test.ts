@@ -5,7 +5,7 @@
 // server, a child process, or a cookie jar.
 import { describe, expect, it } from "vitest";
 import { DshClient, DshRpcError, collectEventsSince, type FetchLike } from "../../src/dsh/client.js";
-import { isRpcEnvelope, classifyHttpStatus, rpcErrorCode } from "../../src/dsh/wire.js";
+import { isRpcEnvelope, classifyHttpStatus, classifyThrownFailure, rpcErrorCode, type ClassifiedWireFailure } from "../../src/dsh/wire.js";
 import type { HistoryEvent } from "../../src/dsh/types.js";
 import "../support/isolation.js";
 
@@ -186,6 +186,7 @@ describe("dsh/client contract", () => {
       kind: "protocol-drift",
       method: "session/list",
       rpcCode: null,
+      path: "result.value.items",
     });
   });
 
@@ -203,6 +204,55 @@ describe("dsh/client contract", () => {
     const session = client(stub.fetchImpl, { webUrl: WEB_URL, cookie: "dsh-auth=fixture", pending: null });
 
     await expect(session.call("session/projections", { request: { sessionId: "s" } })).resolves.toBeNull();
+  });
+});
+
+/**
+ * Runs a call that must fail and returns the classified failure.
+ *
+ * R2-4 is about what a *caller* can see, so these assertions go through `classifyThrownFailure`
+ * instead of reading the thrown `DshRpcError` directly.
+ */
+async function driftOf(call: () => Promise<unknown>): Promise<ClassifiedWireFailure> {
+  try {
+    await call();
+  } catch (error) {
+    return classifyThrownFailure(error);
+  }
+  throw new Error("expected the call to fail as protocol drift");
+}
+
+describe("dsh/client protocol drift carries the method and the wire path", () => {
+  it.each([
+    {
+      shape: "a missing required field",
+      value: { items: [{ running: false, blank: false, cwd: "/w" }] },
+      path: "result.value.items.0.sessionId",
+    },
+    { shape: "a field of the wrong type", value: { items: "not-an-array" }, path: "result.value.items" },
+    { shape: "a top-level shape mismatch", value: null, path: "result.value" },
+  ])("locates $shape at $path", async ({ value, path }) => {
+    const stub = stubFetch({ rpc: () => Response.json({ result: { ok: true, value } }) });
+    const session = client(stub.fetchImpl, { webUrl: WEB_URL, cookie: "dsh-auth=fixture", pending: null });
+
+    const classified = await driftOf(() => session.call("session/list", { _request: {} }));
+
+    expect(classified).toMatchObject({ kind: "protocol-drift", method: "session/list", path });
+    // Both facts must also reach an operator reading the text, not only the code.
+    expect(classified.message).toContain("session/list");
+    expect(classified.message).toContain(path);
+  });
+
+  it("treats an invalid request as drift and anchors its path in the request envelope", async () => {
+    const stub = stubFetch();
+    const session = client(stub.fetchImpl, { webUrl: WEB_URL, cookie: "dsh-auth=fixture", pending: null });
+
+    const classified = await driftOf(() => session.call("session/list", { request: {} } as never));
+
+    expect(classified).toMatchObject({ kind: "protocol-drift", method: "session/list", path: "payload.args._request" });
+    expect(classified.message).toContain("payload.args._request");
+    // Still a caller-side failure: nothing reached the wire.
+    expect(stub.calls.filter((entry) => entry.url.includes("/api/"))).toHaveLength(0);
   });
 });
 

@@ -14,6 +14,7 @@ import {
   isAbortOrTimeout,
   isKnownTransportCode,
   isWireFailureKind,
+  parseFailurePath,
   transportErrorCode,
   type WireFailureKind,
 } from "../../src/dsh/wire.js";
@@ -31,7 +32,13 @@ describe("dsh/wire classification", () => {
       rpcCode: "MISSING_CREDENTIAL",
     });
 
-    expect(classifyThrownFailure(auth)).toEqual({ kind: "auth-expired", code: null, message: "cookie unauthorized" });
+    expect(classifyThrownFailure(auth)).toEqual({
+      kind: "auth-expired",
+      code: null,
+      message: "cookie unauthorized",
+      method: "session/list",
+      path: null,
+    });
     expect(classifyThrownFailure(rpc).kind).toBe("rpc");
     expect(classifyThrownFailure(rpc).code).toBe("MISSING_CREDENTIAL");
     expect(classifyThrownFailure(rpc).message).toContain("no API key for provider route");
@@ -43,7 +50,8 @@ describe("dsh/wire classification", () => {
       method: "session/page",
     });
 
-    expect(classifyThrownFailure(drift)).toMatchObject({ kind: "protocol-drift", code: null });
+    expect(classifyThrownFailure(drift)).toMatchObject({ kind: "protocol-drift", code: null, path: null });
+    expect(classifyThrownFailure(drift).method).toBe("session/page");
     expect(classifyThrownFailure(drift).message).toContain("records: nope");
   });
 
@@ -62,6 +70,8 @@ describe("dsh/wire classification", () => {
       kind: "unknown",
       code: null,
       message: "a thrown string",
+      method: null,
+      path: null,
     });
   });
 
@@ -108,5 +118,77 @@ describe("dsh/wire classification", () => {
     // `WireFailureKind` into `recoveryPolicyFor` only compiles while the two stay in sync.
     const kinds: WireFailureKind[] = ["auth-expired", "transport", "protocol-drift", "not-found", "rpc"];
     for (const kind of kinds) expect(recoveryPolicyFor(kind).attempts).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("dsh/wire structured protocol drift", () => {
+  it("adds the anchored wire path when the text only names the bare validator path", () => {
+    const drift = new DshRpcError(
+      "session/page failed: the Host answered with a value that drifts from the contract (records.0.event.seq: Expected number).",
+      { kind: "protocol-drift", method: "session/page", path: "result.value.records.0.event.seq" },
+    );
+
+    const classified = classifyThrownFailure(drift);
+    expect(classified).toMatchObject({
+      kind: "protocol-drift",
+      method: "session/page",
+      path: "result.value.records.0.event.seq",
+    });
+    // The method is already in the text, so it is not repeated; the anchor is what gets added.
+    expect(classified.message).toBe(`${drift.message} (path result.value.records.0.event.seq)`);
+    expect(classified.message).not.toContain("method session/page");
+  });
+
+  it("leaves the text alone when it already names the method and the anchored path", () => {
+    const message = "session/list failed: the value drifts at result.value.items";
+    const drift = new DshRpcError(message, {
+      kind: "protocol-drift",
+      method: "session/list",
+      path: "result.value.items",
+    });
+
+    expect(classifyThrownFailure(drift).message).toBe(message);
+  });
+
+  it("names the method and the path in the text when the throw does not", () => {
+    const drift = new DshRpcError("the contract changed", {
+      kind: "protocol-drift",
+      method: "session/list",
+      path: "result.value.items",
+    });
+
+    const classified = classifyThrownFailure(drift);
+    expect(classified.message).toBe("the contract changed (method session/list, path result.value.items)");
+    expect(classified.method).toBe("session/list");
+    expect(classified.path).toBe("result.value.items");
+  });
+
+  it("derives the path from the validator failure on the cause chain", () => {
+    // The real shape: the client rethrows a typed error whose `cause` is the validator failure.
+    const caused = new DshRpcError("session/page failed: drift", {
+      kind: "protocol-drift",
+      method: "session/page",
+      cause: { issues: [{ path: ["records", 0, "event", "seq"], message: "Expected number" }] },
+    });
+
+    expect(classifyThrownFailure(caused)).toMatchObject({ method: "session/page", path: "records.0.event.seq" });
+    expect(classifyThrownFailure(caused).message).toContain("path records.0.event.seq");
+  });
+
+  it("reads a root-level mismatch as the root rather than an empty path", () => {
+    expect(parseFailurePath({ issues: [{ path: [], message: "Expected object, received null" }] })).toBe("(root)");
+    expect(parseFailurePath({ issues: [{ path: ["items", 0], message: "Expected object" }] })).toBe("items.0");
+    expect(parseFailurePath({ issues: [] })).toBeNull();
+    expect(parseFailurePath(new Error("no validator"))).toBeNull();
+    expect(classifyThrownFailure(new Error("no validator")).path).toBeNull();
+  });
+
+  it("keeps the path field drift-only so an errno path cannot be mistaken for a field", () => {
+    const missing = Object.assign(new Error("ENOENT: no such file or directory"), {
+      code: "ENOENT",
+      path: "C:/scratch/missing.json",
+    });
+
+    expect(classifyThrownFailure(missing)).toMatchObject({ kind: "not-found", path: null });
   });
 });

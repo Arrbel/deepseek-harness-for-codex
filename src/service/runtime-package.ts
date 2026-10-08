@@ -30,7 +30,7 @@ import {
 import { identityOwnsRecord, orphanState, parsePidFile, pidFilePath, type PidFileRecord } from "../policy/orphans.js";
 import { isProcessAlive, readProcessIdentity } from "./process-tree.js";
 import type { NpmCliResolution } from "../config/types.js";
-import { npmCliCandidates } from "../config/resolve.js";
+import { npmCliCandidates, resolvePruneVersionsEnabled } from "../config/resolve.js";
 import { tail as tailShared } from "../util/errors.js";
 
 // Re-exported so acquisition keeps one public surface; the definitions are the pure
@@ -648,15 +648,13 @@ const STAGING_DIRECTORY_PREFIX = ".tmp-";
 /** Age after which a staging directory is treated as the leftover of a crashed install. */
 const DEFAULT_STAGING_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 
-/** `DSH_MCP_PRUNE_VERSIONS` values that disable pruning outright. */
-const PRUNE_DISABLED_VALUES = new Set(["0", "false", "no", "off", "disabled"]);
-
-/** Whether the environment wants unused version directories pruned (default: enabled). */
-export function pruneEnabledByEnvironment(env: NodeJS.ProcessEnv = process.env): boolean {
-  const value = env.DSH_MCP_PRUNE_VERSIONS?.trim().toLowerCase();
-  if (value === undefined || value === "") return true;
-  return !PRUNE_DISABLED_VALUES.has(value);
-}
+/**
+ * Whether the environment wants unused version directories pruned (default: enabled).
+ *
+ * The parse itself lives with every other `DSH_MCP_*` variable in `config/resolve.ts` (R2-7
+ * 归口); this alias keeps the prune's public surface next to the rules it enables.
+ */
+export const pruneEnabledByEnvironment = resolvePruneVersionsEnabled;
 
 /** One directory under `<dataDir>/versions/` that is not a staging directory. */
 export interface VersionDirectoryCandidate {

@@ -4,6 +4,7 @@
 // here rather than in the service layer. Records are mutable internally; callers only ever
 // see the projected {@link RunSnapshot}.
 
+import { nextActionFor, webUrlStaleFor } from "./state.js";
 import type { FailureReason, RunSnapshot, RunStatus } from "./types.js";
 
 /** One run as this process tracks it. */
@@ -116,6 +117,10 @@ export class RunRegistry {
       webUrl: run.webUrl,
       status: run.status,
       reason: run.reason,
+      // Both are *derived* here and nowhere else: `reason` is the only input, so the snapshot can
+      // never disagree with the failure it reports (R2-1 / R2-2).
+      nextAction: nextActionFor(run.reason),
+      webUrlStale: webUrlStaleFor(run.reason),
       cancelRequested: run.cancelRequested,
       startedAt: run.startedAt.toISOString(),
       finishedAt: run.finishedAt?.toISOString() ?? null,

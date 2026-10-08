@@ -14,7 +14,7 @@
 // another layer. {@link FailureKind} therefore restates `dsh/wire.ts`'s `WireFailureKind`
 // members (plus `unknown`); `tests/unit/wire.test.ts` fails to compile if the two drift apart.
 
-import type { FailureReason } from "./types.js";
+import type { FailureReason, RunAction } from "./types.js";
 import type { RunRecord } from "./registry.js";
 
 /** What a run converges to. */
@@ -133,6 +133,70 @@ export function outcomeFor(kind: FailureKind, code: string | null, message: stri
 /** True once the run reached a terminal status, by either gate. */
 export function isTerminal(record: RunRecord): boolean {
   return record.settled || record.status !== "running";
+}
+
+/**
+ * The failure reasons that are *closed* vocabulary — i.e. everything except the three open
+ * families (`rpc:`, `turn-aborted:`, `turn-unknown:`), which carry a code this project may never
+ * have seen.
+ */
+export type ClosedFailureReason = Exclude<FailureReason, `${string}:${string}`>;
+
+/**
+ * `reason → next action`, the single source of `RunSnapshot.nextAction` (R2-1).
+ *
+ * The table is `satisfies Record<ClosedFailureReason, RunAction>`, so adding a closed reason
+ * without deciding its action is a **compile error** rather than a silent fallback. Every open
+ * family is intentionally absent and therefore lands on `report-only`: an unnameable failure must
+ * not be answered with a plausible-looking guess (`rpc:session/not-found` *looks* like
+ * "new-session", but deciding that is a product judgement, not a derivation).
+ *
+ * `turn-blocked` → `new-session` (Lead ruling, task-21 revision 4): the turn was rejected **before
+ * any step ran**, so there is nothing to narrow — and the already-published guidance
+ * (`SKILL.md`, README) says "try a fresh session or check the permission mode". A rejection is a
+ * session/permission-side condition, and a fresh session is the cheap, clean retry.
+ *
+ * `turn-interrupted` → `report-only` (same ruling, and the evidence confirms it): it is DSH's
+ * *crash recovery* for a persisted log (`packages/core/session/src/repair.ts:20-29`), and the
+ * resume path reopens the **same** session and continues
+ * (`packages/core/agent-loop/src/index.ts:848-880`), with the cold read documented as "ready for
+ * in-place Session restoration"
+ * (`packages/session-query/session-query/src/cold-read.ts:20-56`). Nothing couples `interrupted`
+ * to session disposal — the ACP codec separately reserves `cancelled` for cancellation *and
+ * disposal* (`packages/acp/acp/src/codec.ts:20-26`). Asserting "the old session is unusable" would
+ * therefore claim something we have not verified.
+ */
+export const NEXT_ACTION_BY_REASON = {
+  auth: "relogin",
+  transport: "restart-service",
+  "protocol-drift": "report-only",
+  "service-unreachable": "restart-service",
+  "turn-blocked": "new-session",
+  "turn-truncated": "retry-narrower",
+  "turn-interrupted": "report-only",
+} as const satisfies Record<ClosedFailureReason, RunAction>;
+
+/**
+ * The single derivation for `RunSnapshot.nextAction` (R2-1): `reason` in, action out.
+ *
+ * `reason === null` is exactly the non-failure state (`running`/`succeeded`/`cancelled` — see
+ * `applyOutcome`), so `none` needs no second input and the field stays one-directional.
+ */
+export function nextActionFor(reason: FailureReason | null): RunAction {
+  if (reason === null) return "none";
+  // Open families (`rpc:*`, `turn-aborted:*`, `turn-unknown:*`) are absent from the table.
+  return (NEXT_ACTION_BY_REASON as Readonly<Record<string, RunAction>>)[reason] ?? "report-only";
+}
+
+/**
+ * Whether the snapshot's `webUrl` still points at a live service (R2-2).
+ *
+ * Only `service-unreachable` proves the service is gone. A restart binds a new port *and* rotates
+ * the launch token, so the old link (and its token) is dead — nothing else in the vocabulary
+ * establishes that.
+ */
+export function webUrlStaleFor(reason: FailureReason | null): boolean {
+  return reason === "service-unreachable";
 }
 
 function applyOutcome(record: RunRecord, outcome: RunOutcome, now: Date): void {

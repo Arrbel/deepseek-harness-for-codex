@@ -78,6 +78,22 @@ export function resolveHarnessPackage(env: NodeJS.ProcessEnv = process.env): str
   return env.DSH_MCP_HARNESS_PACKAGE?.trim() || DEFAULT_HARNESS_PACKAGE;
 }
 
+/** `DSH_MCP_PRUNE_VERSIONS` values that turn the version-directory prune off. */
+const PRUNE_DISABLED_VALUES = new Set(["0", "false", "no", "off", "disabled"]);
+
+/**
+ * Whether the runtime version-directory prune is enabled (default: enabled).
+ *
+ * This only decides *whether* the prune runs; what it may delete is decided by the fail-closed
+ * rules in `service/runtime-package.ts`. An explicit opt-out is the supported way to keep the
+ * old version directories around for rollback, because age is not evidence of "not in use".
+ */
+export function resolvePruneVersionsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env.DSH_MCP_PRUNE_VERSIONS?.trim().toLowerCase();
+  if (value === undefined || value === "") return true;
+  return !PRUNE_DISABLED_VALUES.has(value);
+}
+
 /**
  * Raw `DSH_MCP_NPM_CLI` value, or `null` when unset.
  *

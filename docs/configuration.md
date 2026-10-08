@@ -16,7 +16,7 @@
 | `DSH_MCP_INSTALL_TIMEOUT_MS` | `900000`（15 分钟） | 运行时包安装预算。一次性前置步骤，独立于启动预算。 | 新增 |
 | `DSH_MCP_STARTUP_TIMEOUT_MS` | `180000`（3 分钟） | 子进程启动到打印 `dsh web: <url>` 的预算；**每产生一行输出即重置**：有进展不算超时，静默挂死才失败。 | 替代旧的固定 120 s |
 | `DSH_MCP_PRUNE_VERSIONS` | 启用 | 安装成功后是否回收非当前 pin 且未被在用服务引用的 `versions/<version>/` 与超期 `.tmp-*`。`off`/`0`/`false`/`no`/`disabled` 关闭（关闭后旧版本目录永久保留，便于随时回滚）。 | 新增（P0-4） |
-| `DSH_PERMISSION_MODE` | `workspace-write` | DSH 权限模式。切到 `danger-full-access` 必须由调用方显式传入。 | 不变 |
+| `DSH_PERMISSION_MODE` | `workspace-write` | DSH 权限模式。**默认值会映射为 `approval: ask`**：需要写文件/执行命令的动作会在 Harness 页面等人工批准，而 MCP 面无法代答（见 `docs/operations.md` §7）。`read-only` 用于审查类任务；只有 `danger-full-access` 会变成 `approval: never`，必须由调用方显式传入。`doctor.permission` 会报告实际生效的模式、来源与审批策略。 | 语义补充（R2-3） |
 | `DSH_TELEMETRY_DISABLED` | `1` | 子进程遥测默认关闭。 | 不变 |
 | `DSH_MCP_NPX_COMMAND` | — | **已废弃**：不再参与启动（启动不再经过 npx/shell）。若仍设置，`doctor` 会在 `deprecatedEnv` 中报告"已废弃且被忽略"。 | 移除 |
 

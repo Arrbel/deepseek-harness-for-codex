@@ -28,6 +28,29 @@
 
 系统化改造的进度以 `docs/roadmap.md` 为准；架构约束见 `docs/architecture.md`。
 
+### Added（Wave R2：使用体验与可诊断性）
+
+- **`RunSnapshot.nextAction`（失败恢复建议）**：由 `reason` **单向派生**的闭集动作（`relogin` / `restart-service` / `new-session` / `retry-narrower` / `report-only` / `none`），非 `failed` 时为 `none`。开放形态（`rpc:<code>` / `turn-aborted:<cause>` / `turn-unknown:<kind>`）**一律 `report-only`**——不确定的原因不猜恢复动作（失败词典见 `docs/operations.md` §4；`NEXT_ACTION_BY_REASON` 用 `satisfies Record<ClosedFailureReason, RunAction>` 约束，新增闭集 reason 忘配动作是**编译错误**）。刻意**不自动执行**：唯一自动重试仍是既有的 `auth` 换 cookie 一次。
+- **`RunSnapshot.webUrlStale`**：仅当 `failed(service-unreachable)` 时为 `true`——服务重启会重分配端口并轮换 token，旧 `webUrl` 与旧 cookie 都作废，必须重新 `start_service` 取新链接。
+- **`doctor.permission`（第 19 个顶层字段）**：`{mode, source, approval, advisory}`，镜像 DSH 自身表达式（`DSH_PERMISSION_MODE ?? 'workspace-write'`；只有 `danger-full-access` 是 `approval: never`）。它让"默认模式会在页面等人工批准"这件事在**起服务之前**可见。**它是报告项，不是前置条件**——四项制 `ready` 语义不变。
+- **协议漂移可定位**：漂移类失败现在同时携带**方法名**与出错字段的 **JSON 路径**（如 `payload.args.request.sessionId`），错误文本里也包含它们；`client.ts` 的 `DshRpcError` 增加 `path`。**修正一处未分类出口**：请求侧的参数校验失败此前以裸 validator 错误逃出 `call()`，现在归类为 `protocol-drift`。
+- **`npm run dsh:try -- <version>`（升级演练）**：验证版本存在 → 以 env 传入（**不改任何文件**）→ 全新临时数据目录 → 真实安装/启动/8 步链路/逐方法协议形状 → 生成演练报告 → `finally` 清理。自带**仓库指纹自检**（跑前跑后比对受跟踪文件）与"真实数据目录必须仍未创建"的断言；并发写者会被如实拦下（`--tolerate-concurrent-writes` 可显式降级）。
+- **CI**：`check.yml` 新增 `macos-latest` 列（覆盖 POSIX-but-not-Linux：无 `/proc` → `pgrep -P` 回退、`open` 而非 `xdg-open`、大小写不敏感路径）；新增独立 `supply-chain` job（`npm audit --omit=dev`，可见不阻塞 + 离线 `npm sbom --sbom-format=cyclonedx` 上传 artifact）。
+- **工程卫生**：`.gitattributes`（`text=auto eol=lf`）消除成片 EOL 警告；`CONTRIBUTING.md` 写明写权纪律、`version:sync` 与 `generated-drift` 的因果关系、反向验证要求、`check`/`check:live` 边界；`docs/architecture.md` §12 增加组件依赖 / `start_run` 时序 / 数据目录与 pidfile 三张 mermaid 图。
+
+### Changed（Wave R2）
+
+- **零运行时依赖**：`dependencies` 清空，`@modelcontextprotocol/sdk` 与 `zod` 移入 `devDependencies`（已内联进 `dist/bin.mjs`）。证据：`npm pack` + `npm install --omit=dev` 得到的安装树里没有它们，而该产物仍能完成 MCP 握手并列出 10 个工具；`npm audit --omit=dev` 为 0 漏洞。
+- **失败词典定稿**：`turn-blocked → new-session`（回合在**任何 step 之前**被拒，重试对象是会话/权限，不是"缩窄任务"）；`turn-interrupted → report-only`（官方源码核实：`interrupted` 是**崩溃恢复**语义——`repair.ts` 只是"balance a persisted log"，`agent-loop` 修复后以 `resume` 用**同一个 sessionId** 继续，disposal 是独立带外事件；因此"换新会话"会断言我们没验证过的事实）；`turn-truncated → retry-narrower`。
+- **`DSH_MCP_PRUNE_VERSIONS` 归口**：env 解析移入 `config/resolve.ts`（`resolvePruneVersionsEnabled`），`runtime-package.ts` 只保留同名转发别名，消除重复解析；该变量同时加入 `.mcp.json` 的 `env_vars` 白名单（此前 Codex 侧无法透传）。
+- **`browser.ts` 平台分支可测**：三平台 opener 改为可注入（`browserLaunch(platform, url)` + `OpenBrowserOptions`），`shell: false` 由运行期约定升级为**类型约束**；此前该文件的三平台分支**全仓零测试引用**。
+- **`DSH_PERMISSION_MODE` 文档口径**：README 中英与 `docs/configuration.md` 明确"默认映射为 `approval: ask`"，并指向 `docs/operations.md` §7（含操作指引与"为什么 MCP 不能代答"）。
+
+### Fixed（Wave R2）
+
+- **`doctor.ready` 文档口径修正**：此前文档写 `ready = problems.length === 0`，而实现早已是"四项前置条件 + 提示性 `problems`"（孤儿、权限提示）——文档与实现不一致会让读者用 `problems.length` 反推可用性。现在明确：`ready` 只看四项，`problems` 可含提示项。
+- **`orphans` 文案与 `port: null` 一致**（独立验证者 N-2 的收尾）：全部端口未知时不再谎称"still hold a port"。
+
 ### Fixed（N-1/N-2：平台分支门禁与孤儿文案，独立验证者复验项）
 
 - **N-1（确定性 CI 阻断）**：`tests/service/launch.test.ts` 断言 `detached === false` 时**没有注入 `platform`**，于是读到 `process.platform`——`launch.ts` 的 `detached: platform !== "win32"` 在 ubuntu 上返回 `true`，而 `check.yml` 的矩阵含两个 `ubuntu-latest`，该列**必然红**（Windows 本地全绿掩盖了它）。现在：原有两条用例**显式 `platform: "win32"`**；新增 POSIX 用例（`linux`/`darwin` → `detached === true`，把 P0-2 的进程组前提钉进门禁）；并新增"**不管宿主是什么平台**都跑两个分支"的模拟用例（在测试内覆盖 `process.platform` 后再构建 launch 向量），使该文件在 Windows 与 ubuntu 上都确定性全绿。

@@ -19,6 +19,7 @@ import {
   resolveDataDirectory,
   resolveHarnessPackage,
   resolveInstallTimeoutMs,
+  resolvePruneVersionsEnabled,
   resolveStartupTimeoutMs,
 } from "../../src/config/resolve.js";
 import { buildHarnessLaunch, launchSpawnOptions } from "../../src/service/launch.js";
@@ -61,6 +62,19 @@ describe("environment resolution", () => {
     expect(resolveInstallTimeoutMs({ DSH_MCP_INSTALL_TIMEOUT_MS: "1234" })).toBe(1234);
     expect(resolveInstallTimeoutMs({ DSH_MCP_INSTALL_TIMEOUT_MS: "soon" })).toBe(DEFAULT_INSTALL_TIMEOUT_MS);
     expect(resolveStartupTimeoutMs({ DSH_MCP_STARTUP_TIMEOUT_MS: "-5" })).toBe(DEFAULT_STARTUP_TIMEOUT_MS);
+  });
+
+  it("enables the version-directory prune by default and only an explicit opt-out disables it", () => {
+    // Absent/blank means "on": the prune is fail-closed, so a default that never reclaimed
+    // anything would leave the 486 MB-per-version leak in place (P0-4).
+    expect(resolvePruneVersionsEnabled({})).toBe(true);
+    expect(resolvePruneVersionsEnabled({ DSH_MCP_PRUNE_VERSIONS: "" })).toBe(true);
+    expect(resolvePruneVersionsEnabled({ DSH_MCP_PRUNE_VERSIONS: "   " })).toBe(true);
+    expect(resolvePruneVersionsEnabled({ DSH_MCP_PRUNE_VERSIONS: "on" })).toBe(true);
+    expect(resolvePruneVersionsEnabled({ DSH_MCP_PRUNE_VERSIONS: "1" })).toBe(true);
+    for (const value of ["off", "OFF", " 0 ", "false", "No", "disabled"]) {
+      expect(resolvePruneVersionsEnabled({ DSH_MCP_PRUNE_VERSIONS: value })).toBe(false);
+    }
   });
 });
 

@@ -3,6 +3,7 @@ name: check
 # Hermetic gate: no network beyond `npm ci`, no credentials, no live DSH.
 # This is the same command maintainers run locally (`npm run check`), including the
 # metadata gate that keeps every generated version fact in sync with package.json.
+# The only network-touching step lives in the separate, informational `supply-chain` job.
 on:
   push:
   pull_request:
@@ -25,7 +26,10 @@ jobs:
       matrix:
         # Windows carries the platform-specific paths that have been audited before
         # (process-tree teardown, hidden console, workspace ACL marks), so it must be
-        # exercised. Node 24 is covered on the cheaper Linux runner.
+        # exercised. Node 24 is covered on the cheaper Linux runner. macOS (R2-9) covers the
+        # POSIX-but-not-Linux branches: no `/proc` (the `pgrep -P` descendant fallback and the
+        # `ps -o command=` identity probe become the live paths), `open` instead of
+        # `xdg-open`, and case-sensitivity assumptions on a case-insensitive filesystem.
         include:
           - os: windows-latest
             node: "22.x"
@@ -33,6 +37,8 @@ jobs:
             node: "22.x"
           - os: ubuntu-latest
             node: "24.x"
+          - os: macos-latest
+            node: "22.x"
     steps:
       - uses: actions/checkout@v4
 
@@ -65,3 +71,43 @@ jobs:
           path: |
             dist/
             plugins/deepseek-harness/
+
+  # R2-7: read-only supply-chain evidence. Deliberately a *separate* job:
+  #   * `check` above stays hermetic (no registry traffic) and is the only merge gate;
+  #   * `npm audit` needs the registry, so it must never gate a PR — an advisory on a
+  #     devDependency is not a reason to block work. It is kept visible through
+  #     `continue-on-error: true` and the job summary;
+  #   * with `dependencies` empty the audit step is the standing proof that this package has
+  #     no production dependency surface at all;
+  #   * the SBOM is generated from the lockfile (offline) and *is* allowed to fail the job:
+  #     a lockfile npm can no longer describe would be a real packaging regression.
+  supply-chain:
+    name: supply chain (audit + SBOM, informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+
+      - name: Install from the lockfile
+        run: npm ci
+
+      - name: Audit the production dependency surface (informational)
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Generate the CycloneDX SBOM from the lockfile (offline)
+        run: npm sbom --sbom-format=cyclonedx > sbom.cdx.json
+
+      - name: Upload the SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          retention-days: 30
+          if-no-files-found: error

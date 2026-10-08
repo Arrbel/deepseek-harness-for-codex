@@ -175,6 +175,10 @@ codex mcp add deepseek-harness -- npx --yes --package=deepseek-harness-for-codex
 - `reason` 仅在 `failed` 时非空，用来说明**为什么**失败：`auth`（凭据失效且重换一次后仍失败）、`service-unreachable`（连接不上/服务中途消失）、`protocol-drift`（Host 的回答不符合契约，含方法与 JSON 路径）、`rpc:<code>`（Host 报的业务错误码）、`turn-blocked`（回合在任何 step 前被拒）、`turn-truncated`（输出被 token 上限截断）、`turn-aborted:<cause>`（被 parent/hook/disposed/legacy 中止）、`turn-interrupted`（崩溃后合成）、`turn-unknown:<kind>`（本项目不认识的原因，一律按失败处理）。
 - 取消语义：用户主动取消（`cancel_run` 或 Web UI）收敛为 `cancelled`；`aborted` 且原因是 `user` 也算取消。`blocked` 与 `max-tokens` 现在都是 `failed`（旧版本会误报成功）。
 - 任何失败路径都会落到终态（含凭据失效、服务被杀、契约漂移）：不会出现"停在 `running` 只留一条 error"的运行。
+- `nextAction`：由 `reason` **单向派生**的下一步动作，闭集六值——`new-session`（换一个新会话重跑：`turn-blocked`，回合在任何 step 前被拒，`blocked` 什么都没产出，缩窄没有对象）、`retry-narrower`（把任务缩窄再试：`turn-truncated`，产出被 token 上限截断）、`restart-service`（重启服务再试：`service-unreachable` / `transport`）、`relogin`（重新 `start_service` 换凭据：`auth`）、`report-only`（只上报、不猜动作：`protocol-drift`、`turn-interrupted`，以及**全部开放形态** `rpc:<code>` / `turn-aborted:<cause>` / `turn-unknown:<kind>`）、`none`（`reason` 为空，即 `running` / `succeeded` / `cancelled`）。开放形态**一律** `report-only`：本项目不认识的失败原因不允许被猜成一个具体动作。`turn-interrupted` 同属"不猜"：它是 DSH 对已持久化日志的**崩溃恢复**（缺失的 step/end、turn/end 由合成事件补齐），恢复后会**继续使用同一个会话**，因此"旧会话不可用"不是我们验证过的事实。
+- `webUrlStale`：**仅**当 `failed(service-unreachable)` 时为 `true`。**服务重启后端口会重新分配、launch token 也会轮换，旧链接随即失效**——此时不要复用旧的 `webUrl`，请重新调用 `start_service` 取新链接。
+
+**默认权限模式需要人工审批**：默认 `DSH_PERMISSION_MODE=workspace-write` 会映射为 `approval: ask`（见 `packages/bundle/base/cordis.patch.yml`）——需要写文件/执行命令的动作会在 Harness 页面等你点批准，而 MCP 面**无法替你回答审批**。此时从 Codex 视角看它只是一个长时间 `running`。请在页面完成批准，或在受控环境显式使用 `DSH_PERMISSION_MODE=danger-full-access`。
 
 ## 配置
 
@@ -186,7 +190,7 @@ codex mcp add deepseek-harness -- npx --yes --package=deepseek-harness-for-codex
 | `DSH_MCP_INSTALL_TIMEOUT_MS` | `900000` | 运行时包的一次性安装预算；与启动预算相互独立（安装进度输出会重置它）。 |
 | `DSH_MCP_STARTUP_TIMEOUT_MS` | `180000` | 启动到打印 URL 的**静默**预算：子进程每产生一行输出就重置，有进展不算超时，只有完全静默才失败。 |
 | `DSH_MCP_WORKSPACE_ROOTS` | 不限制 | `start_run` 允许使用的绝对根目录列表，使用当前平台的路径分隔符。 |
-| `DSH_PERMISSION_MODE` | `workspace-write` | DeepSeek Harness 权限模式。 |
+| `DSH_PERMISSION_MODE` | `workspace-write` | DSH 权限模式。**默认值会映射为 `approval: ask`**：需要写文件/执行命令的动作会在 Harness 页面等人工批准，而 MCP 面无法代答（见 `docs/operations.md` §7）。`read-only` 用于审查类任务；只有 `danger-full-access` 会变成 `approval: never`，必须由调用方显式传入。`doctor.permission` 会报告实际生效的模式、来源与审批策略。 |
 | `DSH_TELEMETRY_DISABLED` | `1` | 传给 Harness 子进程；默认关闭遥测。 |
 | `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` | 未设置 / 服务商默认值 | 可选的 DeepSeek 凭据与兼容 API 地址。 |
 | ~~`DSH_MCP_NPX_COMMAND`~~ | **已移除** | 启动向量不再使用 npx。若环境里仍然设置，`doctor` 会报告它「已废弃且被忽略」并给出迁移提示。 |
@@ -217,13 +221,14 @@ Harness 子进程默认关闭遥测。Web 服务只绑定回环地址并自动�
 | `dataDirectory` | `{path, source, exists, writable}`。`source` ∈ `DSH_MCP_DATA_DIR`/`PLUGIN_DATA`/`default`（说明这个路径是谁定的）；`exists` 为假时 `writable` 必为 `unknown`。目录**已存在**时才做一次"建临时文件→删除"的真实探测（`yes`/`no`）；目录不存在时返回 `unknown` 且**不会创建它**（首跑安装时才创建）。 |
 | `proxy` | `{env, noProxy}`，只报告不判断。 |
 | `deprecatedEnv` | 仍被设置但已废弃、且被忽略的变量（如 `DSH_MCP_NPX_COMMAND`）。 |
-| `ready` | `engines.supported && npmCli.exists && dataDirectory.writable !== "no" && runtimePackage.error === null`。**只看这四项**：`orphans` 之类的提示性 `problems` 不会改变它。不安装、不下载、不探测网络。 |
+| `ready` | `engines.supported && npmCli.exists && dataDirectory.writable !== "no" && runtimePackage.error === null`。**只看这四项**：报告项（例如 `orphans`、`permission`）不会改变它。不安装、不下载、不探测网络。 |
 | `problems` | `string[]`：每项包含"一条问题 + 照着做就能修的说明"。两类内容：① 四项前置条件不满足（Node 不在区间 / npm CLI 找不到或不是绝对路径 / 数据目录不可写 / 运行时包 spec 非法）——这类必然让 `ready=false`；② **提示性**问题（例如检测到孤儿服务进程）。**空数组表示没有任何问题**，`ready=false` 时条目 ① 必非空。细节层仍是 `runtimePackage.error`。 |
 | `orphans` | `Array<{pid, port, serviceHome, state}>`：上一次运行留下的服务状态（`<数据目录>/services/<key>/dsh.pid`）。`state`：`alive`＝进程仍活且**已确认是我们启动的那一个**（命令含我们的 `lib/bin.js` 与 `--port`）；`unverified`＝进程仍活但**身份无法确认**（绝不会按 pid 盲杀，PID 复用会误杀用户进程）；`stale-pidfile`＝pidfile 存在但进程已退出或文件损坏。无孤儿时为 `[]`。下一次 `start_service` 会自动回收已确认的孤儿，回收不成功时如实保留证据。 |
 | `nodeVersion` / `nodeSupported` | 当前 Node 版本，以及它是否落在支持区间（`engines` 的扁平副本，便于一次性判断）。 |
 | `platform` / `architecture` | 运行平台与架构（如 `win32`/`darwin`/`linux` 与 `x64`/`arm64`）。 |
 | `apiKeyInEnvironment` | 宿主环境里是否可见 `DEEPSEEK_API_KEY`：**只报告布尔值**，既不读取也不回显其内容。 |
 | `allowedWorkspaceRoots` | `DSH_MCP_WORKSPACE_ROOTS` 的解析结果：**未配置时为 `[]`**（空数组就是"不限制"的表示，不是 `null`）；配置后为按平台分隔符切分出的根路径数组（合法性仍在 `start_run` 时按工作区策略校验）。 |
+| `permission` | `{mode, source, approval, advisory}`：下一次启动 Harness 会用到的权限模式。`source`：`env`（你显式设了 `DSH_PERMISSION_MODE`）或 `default`（未设置 → `workspace-write`）；`approval`：按 DSH 自身策略推导（只有 `danger-full-access` 是 `never`，其余都是 `ask`）；`advisory`：`ask` 时给出可操作说明（需要人工在 Harness 页面点批准，MCP 面无法代答），`never` 时为 `null`。**它是报告项，不是前置条件**：不会改变 `ready`。 |
 | `surface` | 本服务提供的交互面，当前恒为 `web`。 |
 
 ## 排障

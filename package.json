@@ -43,6 +43,7 @@
     "check-metadata": "node scripts/check-metadata.mjs",
     "check": "npm run typecheck && npm run test && npm run check-metadata && npm run build && node scripts/check-metadata.mjs --self-contained",
     "check:live": "node scripts/check-live-guard.mjs && vitest run tests/e2e/live.test.ts --reporter=verbose",
+    "dsh:try": "node scripts/dsh-try.mjs",
     "prepare:plugin": "npm run version:sync && npm run check",
     "prepack": "npm run check",
     "release:check": "npm run check && npm pack --dry-run",
@@ -56,14 +57,13 @@
     "agent"
   ],
   "license": "MIT",
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
-    "zod": "4.4.3"
-  },
+  "dependencies": {},
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@types/node": "22.20.0",
     "tsdown": "0.22.14",
     "typescript": "6.0.3",
-    "vitest": "4.1.10"
+    "vitest": "4.1.10",
+    "zod": "4.4.3"
   }
 }

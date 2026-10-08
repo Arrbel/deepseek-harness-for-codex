@@ -23,7 +23,7 @@ import {
 } from "../../src/config/resolve.js";
 import { buildHarnessLaunch, launchSpawnOptions } from "../../src/service/launch.js";
 import { findNpmCli, resolveNpmCli } from "../../src/service/npm-cli.js";
-import { inspectRuntime, prerequisiteProblems } from "../../src/diagnostics/doctor.js";
+import { inspectRuntime, permissionReport, prerequisiteProblems } from "../../src/diagnostics/doctor.js";
 import { orphanProblem } from "../../src/policy/orphans.js";
 import {
   RuntimePackageError,
@@ -292,5 +292,44 @@ describe("orphan advisory wording matches the evidence (N-2)", () => {
 
     expect(line).toContain("leftover pid files");
     expect(line).not.toContain("holding port");
+  });
+});
+
+describe("doctor.permission mirrors the Harness approval policy without touching ready (R2-3)", () => {
+  it("defaults to workspace-write + ask, and says what that means", () => {
+    const report = permissionReport({});
+
+    expect(report.mode).toBe("workspace-write");
+    expect(report.source).toBe("default");
+    expect(report.approval).toBe("ask");
+    expect(report.advisory).toContain("cannot answer that prompt");
+    expect(report.advisory).toContain("DSH_PERMISSION_MODE");
+  });
+
+  it("is the harness bundle's own expression: only danger-full-access is never", () => {
+    // packages/bundle/base/cordis.patch.yml:248
+    //   policy: (DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask'
+    expect(permissionReport({ DSH_PERMISSION_MODE: "danger-full-access" }).approval).toBe("never");
+    expect(permissionReport({ DSH_PERMISSION_MODE: "danger-full-access" }).advisory).toBeNull();
+    expect(permissionReport({ DSH_PERMISSION_MODE: "read-only" }).approval).toBe("ask");
+    expect(permissionReport({ DSH_PERMISSION_MODE: "workspace-write" }).approval).toBe("ask");
+    // An empty override still lands on the default, and anything unknown still asks (fail-closed).
+    expect(permissionReport({ DSH_PERMISSION_MODE: "   " }).source).toBe("default");
+    expect(permissionReport({ DSH_PERMISSION_MODE: "something-new" }).approval).toBe("ask");
+  });
+
+  it("reports the source so a default can be told apart from a decision", () => {
+    expect(permissionReport({ DSH_PERMISSION_MODE: "workspace-write" }).source).toBe("env");
+    expect(permissionReport({}).source).toBe("default");
+  });
+
+  it("never widens `ready`: the permission key is not a prerequisite", () => {
+    const report = inspectRuntime({ DSH_MCP_DATA_DIR: scratch() });
+    const problems = report.problems as string[];
+
+    expect(Object.keys(report)).toContain("permission");
+    expect(report.permission).toEqual(permissionReport({}));
+    // Same four-term composition as before this field existed.
+    expect(report.ready).toBe(problems.length === 0);
   });
 });
