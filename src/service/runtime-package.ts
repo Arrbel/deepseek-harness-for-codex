@@ -19,7 +19,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { hostname } from "node:os";
-import { isAbsolute, join, normalize, resolve } from "node:path";
+import { join, normalize, resolve } from "node:path";
 import {
   RuntimePackageError,
   SUPPORTED_NODE_RANGE,
@@ -29,8 +29,7 @@ import {
 } from "../policy/package-spec.js";
 import { identityOwnsRecord, orphanState, parsePidFile, pidFilePath, type PidFileRecord } from "../policy/orphans.js";
 import { isProcessAlive, readProcessIdentity } from "./process-tree.js";
-import type { NpmCliResolution } from "../config/types.js";
-import { npmCliCandidates, resolvePruneVersionsEnabled } from "../config/resolve.js";
+import { resolvePruneVersionsEnabled } from "../config/resolve.js";
 import { tail as tailShared } from "../util/errors.js";
 
 // Re-exported so acquisition keeps one public surface; the definitions are the pure
@@ -55,40 +54,10 @@ function tail(value: string, max = STDERR_TAIL_CHARACTERS): string {
   return tailShared(value, max);
 }
 
-/** Returns the first existing npm CLI, or `null` when none of the candidates exist. */
-export function findNpmCli(env: NodeJS.ProcessEnv = process.env): NpmCliResolution | null {
-  try {
-    return resolveNpmCli(env);
-  } catch {
-    return null;
-  }
-}
-
-/** Resolves the npm CLI or throws with the exact list of probed locations. */
-export function resolveNpmCli(env: NodeJS.ProcessEnv = process.env): NpmCliResolution {
-  const candidates = npmCliCandidates(env);
-  const override = candidates[0];
-  if (override !== undefined && override.source === "DSH_MCP_NPM_CLI") {
-    if (!isAbsolute(override.path)) {
-      throw new RuntimePackageError("npm-cli-missing", `DSH_MCP_NPM_CLI must be an absolute path to npm-cli.js, received ${JSON.stringify(override.path)}.`, {
-        hint: "Point it at the real js entry, for example <node>\\node_modules\\npm\\bin\\npm-cli.js — not at npm.cmd, which needs a shell.",
-      });
-    }
-    if (!existsSync(override.path)) {
-      throw new RuntimePackageError("npm-cli-missing", `DSH_MCP_NPM_CLI does not exist: ${override.path}`, {
-        hint: "Fix the path or unset DSH_MCP_NPM_CLI so it is derived from process.execPath.",
-      });
-    }
-    return override;
-  }
-  const found = candidates.find((candidate) => existsSync(candidate.path));
-  if (found !== undefined) return found;
-  throw new RuntimePackageError(
-    "npm-cli-missing",
-    `Could not locate npm-cli.js. Probed: ${candidates.map((candidate) => candidate.path).join(", ")}`,
-    { hint: "Set DSH_MCP_NPM_CLI to the absolute path of npm-cli.js, or install npm next to the running Node." },
-  );
-}
+// `findNpmCli`/`resolveNpmCli` used to be duplicated here (34 byte-identical lines with
+// `service/npm-cli.ts`) while nothing imported this copy. The single implementation lives in
+// `service/npm-cli.ts`; a copy that no caller reaches is worse than no copy, because it invites a
+// future fix in the wrong file (found by R3-6 coverage/property work).
 
 /** Throws unless the running Node satisfies {@link SUPPORTED_NODE_RANGE}. */
 export function assertSupportedNode(version: string = process.versions.node): void {

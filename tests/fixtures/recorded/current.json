@@ -1,0 +1,15 @@
+{
+  "name": "recorded-dsh-wire-pointer",
+  "dshLine": "0.2.1",
+  "recordedVersion": "0.2.1-alpha.1",
+  "capturedAt": "2026-10-08T13:49:51.421Z",
+  "note": "Pointer to the version line the contract currently replays. The capture itself lives once, under <dshLine>/; this file exists so a new line adds a directory and moves the pointer instead of duplicating the recording set.",
+  "files": [
+    "contract.json",
+    "meta.json",
+    "projections-after.json",
+    "projections-start.json",
+    "session-list.json",
+    "session-page.json"
+  ]
+}

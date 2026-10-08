@@ -147,7 +147,7 @@ export function describeParseFailure(error: unknown): string {
     const remaining = issues.length - described.length;
     return remaining > 0 ? `${described.join("; ")} (+${String(remaining)} more)` : described.join("; ");
   }
-  const message = error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : renderUnknown(error);
   return message === "" ? "unrecognized value" : message;
 }
 
@@ -171,6 +171,30 @@ export function parseFailurePath(error: unknown): string | null {
     if (Array.isArray(issues) && issues.length > 0) {
       const first = issues[0] as { path?: unknown };
       return Array.isArray(first.path) && first.path.length > 0 ? first.path.join(".") : "(root)";
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return null;
+}
+
+/**
+ * The type name the first validator issue *expected*, or `null` when there is none.
+ *
+ * Only the validator's own type word (`string`, `object`, `array`, …) is returned — never the
+ * received value and never the message, both of which can carry payload content. Drift telemetry
+ * (`dsh/drift.ts`) is the consumer, and it whitelists this string again on the way out.
+ */
+export function parseExpectedType(error: unknown): string | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4; depth++) {
+    if (typeof current !== "object" || current === null) return null;
+    const own = (current as { expected?: unknown }).expected;
+    if (typeof own === "string" && own !== "") return own;
+    const issues = (current as { issues?: unknown }).issues;
+    if (Array.isArray(issues) && issues.length > 0) {
+      const first = issues[0] as { expected?: unknown; code?: unknown };
+      if (typeof first.expected === "string" && first.expected !== "") return first.expected;
+      return typeof first.code === "string" && first.code !== "" ? first.code : null;
     }
     current = (current as { cause?: unknown }).cause;
   }
@@ -201,11 +225,36 @@ export interface ClassifiedWireFailure {
   readonly path: string | null;
 }
 
-/** Operator-facing text of an arbitrary throw. */
+/** Operator-facing text of an arbitrary throw. Never throws, never empty. */
 function thrownText(error: unknown): string {
-  if (error instanceof Error) return error.message === "" ? error.name : error.message;
-  if (typeof error === "string") return error;
-  return String(error);
+  if (error instanceof Error) return error.message === "" ? (error.name === "" ? "Error" : error.name) : error.message;
+  const rendered = renderUnknown(error);
+  return rendered === "" ? "unrecognized value" : rendered;
+}
+
+/**
+ * Renders an arbitrary unknown value as text **without ever throwing**.
+ *
+ * `String(value)` is not total: a symbol nested inside an aggregate throws (`String([Symbol()])`),
+ * and `Array.isArray` throws on a revoked proxy. The classifier promises to classify *any* thrown
+ * value (R3-6 property test `classifyThrownFailure is total`), so a hostile or exotic value must
+ * still come out as text — "unprintable value" is a truthful answer, an exception is not.
+ */
+function renderUnknown(value: unknown, depth = 0): string {
+  try {
+    return renderSafe(value, depth);
+  } catch {
+    return "unprintable value";
+  }
+}
+
+function renderSafe(value: unknown, depth: number): string {
+  if (typeof value === "symbol") return value.toString();
+  if (Array.isArray(value)) {
+    if (depth >= 4) return "[…]";
+    return value.map((entry) => renderUnknown(entry, depth + 1)).join(",");
+  }
+  return String(value);
 }
 
 /** A non-empty string property of an unknown value, or `null`. */

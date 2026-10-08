@@ -66,6 +66,24 @@ export type TurnFailureReason =
   | "turn-interrupted"
   | `turn-unknown:${string}`;
 
+/**
+ * The closed set of `turn/end.reason.kind` members the official `TurnEndReasonMap` declares.
+ *
+ * `turnEndOutcome` treats a kind outside this set as `turn-unknown:*` (fail closed), so the set is
+ * written down once here: the contract matrix (R3-1) records it per DSH version line, and a kind
+ * added by a future Harness is exactly the drift this project wants to *notice* rather than guess
+ * at. Source: `deepseek-harness/packages/core/session/src/types.ts:201-229`.
+ */
+export const TURN_END_REASON_KINDS: readonly string[] = [
+  "completed",
+  "aborted",
+  "blocked",
+  "error",
+  "max-tokens",
+  "interrupted",
+  "forked",
+];
+
 /** What a terminal turn means for the run. */
 export type TurnEndOutcome =
   | { kind: "succeeded" }

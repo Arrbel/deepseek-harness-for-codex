@@ -69,6 +69,11 @@ export class RunRegistry {
     return [...this.runs.values()];
   }
 
+  /** One run, or `null` when this process does not track it (never throws). */
+  public find(runId: string): RunRecord | null {
+    return this.runs.get(runId) ?? null;
+  }
+
   /** One run or the caller-facing error. */
   public require(runId: string): RunRecord {
     const run = this.runs.get(runId);

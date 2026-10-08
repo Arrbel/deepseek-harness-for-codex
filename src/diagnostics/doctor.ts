@@ -24,6 +24,7 @@ import {
   type DataDirectorySource,
 } from "../config/resolve.js";
 import { PACKAGE_VERSION } from "../version.js";
+import { classifyContract, contractBlocksReadiness, type ContractReport } from "../dsh/matrix.js";
 
 /** Installed-state summary of the pinned runtime package. */
 export interface RuntimePackageReport {
@@ -180,6 +181,8 @@ export interface PrerequisiteInputs {
   npmFound: boolean;
   dataDirectory: DataDirectoryReport;
   runtimePackage: RuntimePackageReport;
+  /** The resolved contract-matrix verdict (R3-1). Only `unsupported` may fail a prerequisite. */
+  contract: ContractReport;
 }
 
 /**
@@ -190,6 +193,11 @@ export interface PrerequisiteInputs {
  * The returned array is composed with advisory entries (a leftover pidfile) into the report's
  * `problems`, so `problems` may be non-empty while `ready` is true — never infer readiness from
  * `problems.length`. `runtimePackage.error` stays as the detail layer.
+ *
+ * `contract` is the fifth branch and is deliberately the narrowest: it fires **only** for a
+ * version line whose wire this project has never recorded. A `compatible` version (a patch on a
+ * recorded line) and `unknown` (nothing resolved yet — the state before the first install) are
+ * reported, never punished; {@link contractBlocksReadiness} is the single place that decides.
  */
 export function prerequisiteProblems(env: NodeJS.ProcessEnv, parts: PrerequisiteInputs): string[] {
   const problems: string[] = [];
@@ -209,6 +217,11 @@ export function prerequisiteProblems(env: NodeJS.ProcessEnv, parts: Prerequisite
       `The runtime package spec "${parts.runtimePackage.spec}" is invalid: ${parts.runtimePackage.error} Set DSH_MCP_HARNESS_PACKAGE to an exact version, for example @deepseek-ai/dsh@0.2.1-alpha.1.`,
     );
   }
+  if (contractBlocksReadiness(parts.contract)) {
+    problems.push(
+      `The harness contract for version line ${String(parts.contract.dshLine)} was never recorded: ${parts.contract.detail}`,
+    );
+  }
   return problems;
 }
 
@@ -225,13 +238,18 @@ export function inspectRuntime(env: NodeJS.ProcessEnv = process.env): Record<str
   const runtimePackage = runtimePackageReport(env);
   const dataDirectory = dataDirectoryReport(env);
   const deprecatedEnv = DEPRECATED_ENV_VARS.filter((name) => (env[name]?.trim() ?? "") !== "");
-  // The four prerequisites decide `ready` (ADR-0003 D3/D-a); they are never widened.
+  // R3-1: the contract verdict is derived from the *resolved* harness version (the version the
+  // configured package spec points at), which is `null` only when the spec itself is unusable.
+  const contract = classifyContract(runtimePackage.version);
+  // The four prerequisites decide `ready` (ADR-0003 D3/D-a); they are never widened. The contract
+  // verdict joins them through `contractBlocksReadiness`, so `compatible`/`unknown` cannot move it.
   const prerequisites = prerequisiteProblems(env, {
     nodeVersion,
     nodeSupported,
     npmFound: npm !== null,
     dataDirectory,
     runtimePackage,
+    contract,
   });
   // Orphaned services are an *advisory*: they are actionable, but a leftover pidfile must not
   // make an otherwise runnable installation report itself as not ready.
@@ -262,6 +280,7 @@ export function inspectRuntime(env: NodeJS.ProcessEnv = process.env): Record<str
     proxy: proxyReport(env),
     deprecatedEnv,
     harnessPackage: runtimePackage.spec,
+    contract,
     apiKeyInEnvironment: Boolean(env.DEEPSEEK_API_KEY?.trim()),
     allowedWorkspaceRoots: resolveAllowedRoots(env),
     orphans,

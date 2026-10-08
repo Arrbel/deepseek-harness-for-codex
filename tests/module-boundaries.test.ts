@@ -140,6 +140,7 @@ const PURE_FILES = [
   "config/types.ts",
   "dsh/contract.ts",
   "dsh/events.ts",
+  "dsh/matrix.ts",
   "dsh/types.ts",
   "dsh/wire.ts",
   "policy/package-spec.ts",

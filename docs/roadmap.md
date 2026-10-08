@@ -55,6 +55,26 @@
 
 **R2 期间产生的新决定**：① 审批**不做**"待审批"字段（理由见 R2-3，与 C4"无公开 RPC"一致）；② 失败恢复动作只做**建议**（`nextAction`）而不自动执行（唯一例外：`auth` 换 cookie 重试一次，这是既有行为）；③ 真实 ubuntu 三列与 `tests/unit/data-location.test.ts` 在真实 POSIX 上的行为**仍属未验证**（模拟只覆盖 `process.platform` 条件维度）。
 
+### Wave R3（P2：韧性、可恢复性与并发）
+
+| 项 | 主题 | 状态 | 任务 | 出口判据 |
+|---|---|---|---|---|
+| R3-1 | 契约版本矩阵（`CONTRACT_MATRIX` 按 DSH 版本分档 + fixture 分档 + `doctor.contract`） | ✅ | task-26（test-foundation） | 只有 baseline 带完整形状、其余只记差异；夹具按版本线分档且**只有一份录制集**（`current.json` 指针）；**只有 `unsupported` 影响 `ready`**（唯一判据 `contractBlocksReadiness`，三条用例钉 `exact`/`compatible`+`unknown`/`unsupported`）；2 条反向验证（矩阵写错 1 红 / 拦截面放大到非 `unknown` 7 红）。证据：`reports/r3-contract-and-drift.md` |
+| R3-2 | 漂移遥测 `<数据目录>/logs/drift.jsonl` | ✅ | task-26 | **只存指针字段**；三层防泄漏（类型名离场 + `method` 白名单 + 写盘前统一脱敏，返回与落盘同一对象）；`logs/` 由第一条记录按需创建；`DSH_MCP_DRIFT_LOG=0` 关闭；写失败静默降级。**7 条反向验证**，其中"把整个载荷 `JSON.stringify` 进字段"让**客户端级探针**真红（`sk-live-…-PROBE-TOKEN`），证明探针是承重的而非字段列表断言 |
+| R3-3 | 运行态持久化（journal 原子写）+ 启动对账 + 跨进程 adopt 锁 | ✅ | task-27（launch-impl） | 三分支各有测试与活体证据（收养 / 无 `turn/end` → `failed` / 服务已死 → `failed` + `webUrlStale`）；**`RunStatus` 未新增成员**；抢不到锁整轮跳过且**不写终态**；`.tmp`+rename 原子写 + 崩溃/rename 失败注入；3 条反向验证。活体 `exit 0`（真实落 journal：`status:"failed"`、`reason:"rpc:MISSING_CREDENTIAL"`、无残留 `.tmp`/锁） |
+| R3-4 | 并发上限与串行化（同工作区串行 + 跨工作区上限 N） | ✅ | task-29（launch-impl） | **拒绝而非排队**：两道门在"碰任何东西之前"判定 → 被拒不建服务/不建会话/不写 journal/不进 `list_runs`（没有记录就没有 `queued`）；`DSH_MCP_RUN_LIMIT` 默认 **4**（报告 §3 有论证）；收养不被门限制。**独立验证首轮判 NO-GO**：并发 `start_run` 有 **check-then-act 竞态**（同工作区两个都准入、上限失效、磁盘两条 `running`）→ 已改**同步原子预留**（判定+占位在同一同步块、任何 `await` 之前、`finally` 释放、键用 `realpathSync` 归一化）+ **U-3 防御性去重**（同 `sessionId` 只留最新参与收养，旧的收敛为 `turn-unknown:superseded-duplicate-journal`）→ 独立复验 **A–E 全过**（竞态探针 **5/5 轮**、归一化 5 种写法恰好 1 准入、早退释放无占位泄漏） |
+| R3-5 | 事件投影增强 + 自适应轮询（廉价版） | ⏳ **推迟到 R4** | 待分配 | 计划调整：它只影响"进度可见性"，不属韧性/恢复主线；推迟可让本轮验证范围聚焦"跨进程状态"这一真正有风险的部分。**不是遗漏** |
+| R3-6 | coverage 基线（**非门禁**）+ 定向属性测试 | ✅ | task-28（layering-impl） | 分层基线（All **88.38 stmts / 84.61 branch**；`src/run` 85.43/81.62、`src/service` 84.98/**76.21** 是最弱两处）；明确点名**拒绝**的注水诱惑（`ConfigError`、`registeredSecretCount()` 各 1 条就能拉满，留白）；属性测试 4 组 69 例；4 条反向验证；**不新增 `fast-check`**（有论证）。**产出两条真实缺陷 + 一处死代码**（见下） |
+| R3-3b | 凭据落盘收口（终态去 token） | ✅ | task-30（launch-impl） | 三道防线（投影 → 写盘 choke point → 读回净化）；活体实测终态记录 `webUrl` 为 `http://127.0.0.1:53766/`、文件级 `contains 'token=' : False`（对照：收口前的活体记录确含 `?token=r46WZfmd…`）；1 条反向验证 4 红后逐字节还原；报告给出"凭据落盘边界"清单与残余风险 |
+
+> **Wave R3 收口**：Lead 串行 `npm run version:sync`（`wrote 2` 把 `DSH_MCP_RUN_LIMIT` 加进 `.mcp.json` 白名单）+ `npm run check` **exit 0**（`Test Files 44 passed | 1 skipped (45)`、**`Tests 707 passed | 1 skipped (708)`**、四道门禁 OK）。**独立验证两轮**：首轮 **NO-GO**（1 个阻断项 N-R3-1 竞态，9 条成立），修复后定向复验 **GO**（A–E 全过 + 回归抽查无语义变化 + 红线 `check` exit 0）；live 首轮已 `exit 0`（install 60.4 s / cold 27.8 s / hot 3.9 s，真实落 journal）。完整报告 `reports/verify-r3.md`（含首轮 NO-GO 原始证据与第二轮修订结论）。
+
+**R3 的原则**：可恢复性只能建立在**已有**的 fail-closed 语义之上——对账不得发明新终态、不得把"未知"写成"成功"、不得因为抢不到锁就替别人下结论。
+
+**R3 期间由覆盖率/属性测试暴露并修掉的真实缺陷**（这是本 Wave 最有价值的产出，全部由 Lead 收口并已随 R3 验证）：
+1. `classifyThrownFailure([Symbol("x")])` **抛异常**（`String([Symbol()])` 不 total）→ 新增永不抛的 `renderUnknown`；2. `message` 可为空串（违反字段文档"never empty"）→ 两处入口加非空兜底；3. `runtime-package.ts` 里与 `service/npm-cli.ts` **逐字节重复 34 行且全仓无人导入**的死代码 → 删除，只留一份实现。
+**R3 期间产生的裁定**：① 跨工作区对账**不加白名单**（否则崩溃的运行永远无人终结；安全性由"服务仍活则收养 + 持有者持锁则跳过"保证）；② `RunStatus` 不因并发而新增 `queued`（拒绝优先）；③ 上限为**每进程**，跨进程共享额度明确不做。
+
 评审明确**不做**的项：遥测上报、版本区间自动降级、每个 patch 版本建 fixture、`doctor --json` 新开关（`structuredContent` 已存在）、全仓 Stryker、IO 编排的属性/变异测试、`check:live` 进 PR 门禁、mac runner 跑 live、自动缩窄重试、交互式审批（无公开 RPC）、keychain 凭据、独立 RELEASING.md。**独立验证后新增的不做项**：为 `ServiceSnapshot` 增加 `orphan` 字段（`doctor.orphans` 已是该可观察面，扩快照属外部契约变更、收益不足）；"停止后保留 `dsh.pid` 并标 `stoppedAt`"（经评估**不关闭**"遗留孤儿无 pidfile 无法归属"这一残余风险，故不加状态）。
 
 ## 阶段依赖

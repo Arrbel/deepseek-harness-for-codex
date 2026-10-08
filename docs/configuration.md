@@ -15,7 +15,9 @@
 | `DSH_MCP_NPM_CLI` | 由 `process.execPath` 推导 | npm CLI **入口 js 的绝对路径**，用于 `node <npmCli> install …`。文件不存在即失败并提示。 | 新增 |
 | `DSH_MCP_INSTALL_TIMEOUT_MS` | `900000`（15 分钟） | 运行时包安装预算。一次性前置步骤，独立于启动预算。 | 新增 |
 | `DSH_MCP_STARTUP_TIMEOUT_MS` | `180000`（3 分钟） | 子进程启动到打印 `dsh web: <url>` 的预算；**每产生一行输出即重置**：有进展不算超时，静默挂死才失败。 | 替代旧的固定 120 s |
-| `DSH_MCP_PRUNE_VERSIONS` | 启用 | 安装成功后是否回收非当前 pin 且未被在用服务引用的 `versions/<version>/` 与超期 `.tmp-*`。`off`/`0`/`false`/`no`/`disabled` 关闭（关闭后旧版本目录永久保留，便于随时回滚）。 | 新增（P0-4） |
+| `DSH_MCP_PRUNE_VERSIONS` | 启用 | 安装成功后是否回收非当前 pin 且未被在用服务引用的 `versions/<version>/` 与超期 `.tmp-*`。`off`/`0`/`false`/`no`/`disabled` 关闭（关闭后旧版本目录永久保留，便于随时回滚）。该变量已列入 `.mcp.json` 的 `env_vars` 白名单，宿主可透传。 | 新增（P0-4 / R2-7 归口） |
+| `DSH_MCP_DRIFT_LOG` | 启用 | 协议漂移遥测：写 `<数据目录>/logs/drift.jsonl`（**只记录指针**：`ts/kind/method/path/expected/gotType/pluginVersion/dshVersion/runId?`，**不含** message 原文、token、cookie、prompt 或模型输出）。`0`/`off`/`false`/`no`/`disabled` 关闭。`logs/` 目录**由第一条记录按需创建**；写入失败静默降级，绝不影响运行。 | 新增（R3-2） |
+| `DSH_MCP_RUN_LIMIT` | `4` | **每进程**同时处于非终态的运行上限（跨工作区；**同一数据目录的单个 MCP 进程内**，同一工作区只允许一个）。越界**拒绝**而不是排队：调用方拿到带占位明细的可操作错误，**不产生运行记录**（因此没有 `queued` 状态，`RunStatus` 语义不变）。`settle()` 到终态即释放槽位；对账收养的运行同样占位。**上限与工作区串行都是进程内的**：多进程各自 N 且各自串行（跨进程共享额度本轮**不做**；跨进程的安全约束来自"每工作区一个服务"的结构与 `runs/.adopt.lock`）。已列入 `.mcp.json` 的 `env_vars` 白名单。 | 新增（R3-4） |
 | `DSH_PERMISSION_MODE` | `workspace-write` | DSH 权限模式。**默认值会映射为 `approval: ask`**：需要写文件/执行命令的动作会在 Harness 页面等人工批准，而 MCP 面无法代答（见 `docs/operations.md` §7）。`read-only` 用于审查类任务；只有 `danger-full-access` 会变成 `approval: never`，必须由调用方显式传入。`doctor.permission` 会报告实际生效的模式、来源与审批策略。 | 语义补充（R2-3） |
 | `DSH_TELEMETRY_DISABLED` | `1` | 子进程遥测默认关闭。 | 不变 |
 | `DSH_MCP_NPX_COMMAND` | — | **已废弃**：不再参与启动（启动不再经过 npx/shell）。若仍设置，`doctor` 会在 `deprecatedEnv` 中报告"已废弃且被忽略"。 | 移除 |

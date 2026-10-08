@@ -1,17 +1,34 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { CONTRACT_MATRIX, matrixLine } from "../../src/dsh/matrix.js";
 import { RunManager } from "../support/manager.js";
 import "../support/isolation.js";
 
 const testsRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const recordedDir = join(testsRoot, "fixtures", "recorded");
+const recordedRoot = join(testsRoot, "fixtures", "recorded");
 const fakeHarness = join(testsRoot, "fixtures", "fake-harness.mjs");
 const projectRoot = join(testsRoot, "..");
 const sourceCheckout = join(projectRoot, "..", "deepseek-harness");
+
+/**
+ * The version line the contract currently replays.
+ *
+ * The capture lives once, under `recorded/<dshLine>/`; `current.json` is the pointer. Replaying
+ * through the pointer is what makes "a second line" a directory plus a moved pointer rather than a
+ * copy of the recording set (R3-1).
+ */
+interface RecordedPointer {
+  dshLine: string;
+  recordedVersion: string;
+  files: string[];
+}
+
+const pointer = JSON.parse(readFileSync(join(recordedRoot, "current.json"), "utf8")) as RecordedPointer;
+const recordedDir = join(recordedRoot, pointer.dshLine);
 
 function load<T>(name: string): T {
   return JSON.parse(readFileSync(join(recordedDir, name), "utf8")) as T;
@@ -201,6 +218,37 @@ describe("recorded DeepSeek Harness 0.2.1 wire", () => {
     expect(meta.authority["paginate"]).toContain("history.ts");
     expect(meta.authority["assistantMessage"]).toContain("types.ts");
     expect(contract.provenance["package"]).toBe("@deepseek-ai/dsh@0.2.1-alpha.1");
+  });
+
+  it("replays the version line the pointer names, and that line is the one the matrix declares", () => {
+    // R3-1: the capture is stored per DSH version line, and `current.json` is the only pointer.
+    expect(pointer.dshLine).toBe(recordedDir.split(/[\\/]/u).at(-1));
+    expect(pointer.recordedVersion).toBe(meta.version);
+    expect(matrixLine(pointer.dshLine)).not.toBeNull();
+    expect(matrixLine(pointer.dshLine)?.fixture).toBe(pointer.dshLine);
+    expect(matrixLine(pointer.dshLine)?.recordedVersions).toContain(pointer.recordedVersion);
+
+    // Every declared file must exist under the line directory — a pointer that outlives its
+    // capture (or a capture moved without the pointer) fails here instead of at replay time.
+    for (const name of pointer.files) expect(existsSync(join(recordedDir, name)), name).toBe(true);
+    for (const name of meta.files) expect(pointer.files, name).toContain(name);
+
+    // One physical capture per line: only the pointer sits at the root of `recorded/`.
+    const rootFiles = readdirSync(recordedRoot).filter((entry) => entry.endsWith(".json"));
+    expect(rootFiles).toEqual(["current.json"]);
+  });
+
+  it("keeps every matrix line's fixture directory present and complete", () => {
+    // The matrix is the index; the fixtures are the evidence. A line declared without its capture
+    // (or with a mismatched pointer) would be a claim nobody can replay.
+    for (const line of CONTRACT_MATRIX) {
+      const directory = join(recordedRoot, line.fixture);
+      expect(existsSync(directory), `fixture directory for ${line.dshLine}`).toBe(true);
+      expect(existsSync(join(directory, "meta.json")), line.dshLine).toBe(true);
+      expect(existsSync(join(directory, "session-page.json")), line.dshLine).toBe(true);
+    }
+    // Exactly one line is the baseline, and it is the one the pointer replays.
+    expect(CONTRACT_MATRIX.filter((line) => line.baseline).map((line) => line.dshLine)).toEqual([pointer.dshLine]);
   });
 
   it.skipIf(!existsSync(sourceCheckout))("agrees with the checked-out official source", () => {

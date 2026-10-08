@@ -44,7 +44,7 @@ codex plugin add deepseek-harness@deepseek-harness-for-codex
 
 先跑 `doctor`（MCP 工具），它报告：本服务版本、Node 引擎是否满足、npm CLI 路径与是否存在、运行时包是否已安装及其版本/路径/占用、数据目录（`{path, source, exists, writable}`）、工作区策略、代理相关环境变量、以及被忽略的废弃变量。
 
-**`doctor` 的顶层字段（19 个，与 README 中英由门禁双向锁定）**：`ready`、`problems`、`version`、`engines`、`nodeVersion`、`nodeSupported`、`platform`、`architecture`、`npmCli`、`runtimePackage`、`harnessPackage`、`dataDirectory`、`proxy`、`deprecatedEnv`、`apiKeyInEnvironment`、`allowedWorkspaceRoots`、`orphans`、`permission`、`surface`。其中 `problems` 是"未满足前置条件 + 修法 + 提示性说明"的字符串数组，`dataDirectory` 是 `{path, source, exists, writable}`，`runtimePackage` 是 `{spec, installed, version, root, binPath, diskBytes, error}`，`orphans` 是 `{pid, port, serviceHome, state}[]`（`state ∈ {alive, unverified, stale-pidfile}`，存在孤儿只追加**提示性** `problems`，不翻转 `ready`），`permission` 是 `{mode, source, approval, advisory}`（见 §7），`proxy` 只报告环境变量（`env`/`noProxy`），`deprecatedEnv` 列出已废弃但仍被设置的变量（例如 `DSH_MCP_NPX_COMMAND`）。新增字段若未同步 README/本文档，门禁会以 `tool-surface-drift` / 文档一致性断言报红。
+**`doctor` 的顶层字段（20 个，与 README 中英由门禁双向锁定）**：`ready`、`problems`、`version`、`engines`、`nodeVersion`、`nodeSupported`、`platform`、`architecture`、`npmCli`、`runtimePackage`、`harnessPackage`、`dataDirectory`、`proxy`、`deprecatedEnv`、`apiKeyInEnvironment`、`allowedWorkspaceRoots`、`orphans`、`permission`、`contract`、`surface`。其中 `problems` 是"未满足前置条件 + 修法 + 提示性说明"的字符串数组，`dataDirectory` 是 `{path, source, exists, writable}`，`runtimePackage` 是 `{spec, installed, version, root, binPath, diskBytes, error}`，`orphans` 是 `{pid, port, serviceHome, state}[]`（`state ∈ {alive, unverified, stale-pidfile}`，存在孤儿只追加**提示性** `problems`，不翻转 `ready`），`permission` 是 `{mode, source, approval, advisory}`（见 §7），`contract` 是 `{dshLine, installedVersion, status, baselineDshLine, recordedVersions, differences, detail}`（契约版本矩阵判定，见 §8），`proxy` 只报告环境变量（`env`/`noProxy`），`deprecatedEnv` 列出已废弃但仍被设置的变量（例如 `DSH_MCP_NPX_COMMAND`）。新增字段若未同步 README/本文档，门禁会以 `tool-surface-drift` / 文档一致性断言报红。
 
 **`doctor.ready` 的判据（四项制，语义不扩大）**：`ready` 只由**四项前置条件**决定——① Node 在引擎区间内；② npm CLI 可解析且存在（必须是 `npm-cli.js` 的绝对路径，不能指向 `npm.cmd`）；③ 数据目录可写（`dataDirectory.writable !== "no"`）；④ 运行时 spec 合法（`DSH_MCP_HARNESS_PACKAGE` 必须是精确版本）。`problems` 是字符串数组：**前置条件失败项 + 可操作的提示性条目**（当前唯一会追加提示的是**残留孤儿服务**——权限模式的提示**不在** `problems` 里，而是在 `permission.advisory`，因此它连 `problems` 都不会碰）。因此 `ready=true` 时 `problems` **可能非空**——判读请只看 `ready` 与前四类条目，不要用 `problems.length` 反推可用性。`dataDirectory` 的可写性是**真实探测**：只在目录**已存在**时"建临时文件→删除"，目录不存在时返回 `exists=false, writable="unknown"` 并提示"首跑安装时创建"——**探测本身绝不创建目录**（这条是 D-07 缺陷的教训：任何顺手建目录的行为都可能写到用户真实 home）。
 
@@ -159,3 +159,50 @@ presets:     workspace-write: { sandbox: workspace-write, approval: ask }
 | 判断当前会怎样 | `doctor.permission = { mode, source, approval, advisory }`：`source=default` 表示"不是你设的，是默认值"；`advisory` 非空时逐字读它 |
 
 > 本项目**不会**替用户批准权限请求，也**不会**把它包装成自动重试：静默批准等于把"用户授权"这件事悄悄删掉（这是 ADR-0003 的同一原则——宁可显式失败，不做猜测）。
+
+## 8. 契约版本矩阵、漂移遥测与运行态恢复（R3）
+
+### 8.1 契约版本矩阵：`doctor.contract`
+
+本项目对 DSH wire 的适配是**按版本线声明**的，而不是"能跑就算兼容"：
+
+| `status` | 含义 | 你该怎么做 |
+|---|---|---|
+| `exact` | 安装版本正是被录制过的那个 | 无需动作 |
+| `compatible` | 同一版本线的另一个版本（只按已声明的差异套用） | 可用；若遇到未声明的漂移，`protocol-drift` 会带着方法名 + JSON 路径报出来 |
+| `unknown` | 还没解析出任何版本（**首次安装前的正常状态**） | 无需动作——它**不是**失败，`ready` 不受影响 |
+| `unsupported` | 该版本线的 wire **从未被录制** | `ready=false` + `problems` 给出版本线与 `DSH_MCP_HARNESS_PACKAGE`；换回已知版本，或按 §8.2 采集新版本线 |
+
+判定是**纯函数**（`src/dsh/matrix.ts`），只有 `unsupported` 进入 `problems` 并影响 `ready`——`exact`/`compatible`/`unknown` 结构上进不去（有反向验证钉住这一点）。
+录制夹具按版本线分档：`tests/fixtures/recorded/<dshLine>/` + `current.json` 指针（**只有一份录制集**，指针指向当前基线，不做复制）。
+
+### 8.2 漂移遥测：`<数据目录>/logs/drift.jsonl`
+
+协议形状不符合预期时，除了失败（`protocol-drift`，带方法名 + JSON 路径）之外还会落一条**指针级**记录，便于事后判断"是 DSH 换了字段，还是我们自己的解析错了"：
+
+- 字段：`ts`、`kind`、`method`、`path`、`expected`、`gotType`、`pluginVersion`、`dshVersion`、`runId?`；
+- **绝不含**：message 原文、token、cookie、prompt 文本、模型输出（载荷只以**类型名**离场，方法名走白名单，写盘前再过一次统一脱敏；有"把 token 塞进字段会红"的反向验证）；
+- 目录由**第一条记录**按需创建（启用后从未漂移 → 目录不存在，不留空目录）；
+- 关闭：`DSH_MCP_DRIFT_LOG=0`；写入失败静默降级，**不影响**运行。
+
+### 8.3 运行态恢复：journal + 对账
+
+MCP host 崩溃/重启后，Harness 侧那个回合可能仍在跑或已结束。为此每次运行都会在该工作区的服务目录下留一条 journal 记录（`services/<hash>/runs/<runId>.json`，`.tmp` + rename 原子写，`0600`），下一次工具调用/服务启动时对**非终态**记录做对账：
+
+| 对账所见 | 结论 |
+|---|---|
+| 会话仍在跑（`session/list` + `projections` 的 `running === true`） | **收养**：保持 `running`，从 journal 的 `lastKnownSeq` 恢复进度（该值在快照里体现为 `lastEventSeq`） |
+| 服务已死 | `failed(service-unreachable)`（快照同时 `webUrlStale: true`、`nextAction: restart-service`） |
+| 会话已空闲**但日志里没有 `turn/end`** | `failed`，复用既有 fail-closed 规则（`turn-unknown:missing-turn-end`）——**绝不写成 `succeeded`** |
+
+跨进程安全：`runs/.adopt.lock` 保证同一 `runId` 只被一个进程对账；**抢不到锁就整轮跳过**，不会替别人的运行写终态。对账是**唯一**写终态的路径（仍走 `settle()`，因此 `RunStatus` 不新增成员）。对账会扫描该数据目录下**所有**工作区的服务目录——否则崩溃的运行永远无人终结；安全性由"服务仍活则收养 + 持有者持锁则跳过"两条保证，而不是靠白名单。
+
+**收养后的进度语义（别看错字段）**：journal 里存的是 `lastKnownSeq`，`RunSnapshot.lastEventSeq` 是它的对外投影。读取窗口是**左开右闭** `(startEventSeq, asOfSeq]`；收养**不改读取游标**（下一次 `refresh()` 仍从 `startEventSeq` 重读整个窗口，因此不会丢助手文本、也不会重复追加）。`lastKnownSeq` 是**单调高水位**（取 journal 记录、窗口最高 seq、`asOfSeq` 三者最大）——host 落后时保留旧值，**绝不凭空造进度**；它**不是**"从这条继续"的承诺。
+
+**凭据落盘边界**：journal 的**非终态**记录允许保留完整 `webUrl`（此时 token 本就在生效，保留它换来收养后仍可点击）；**终态记录只留 origin + path**（已无用途的凭据不留在磁盘上）。逐条清单：
+
+| 会含 token | 不会含 token |
+|---|---|
+| ① 非终态 journal（仅该运行存活期间）<br>② DSH 自身的数据（同目录、同信任边界）<br>③ 返回给调用方的 `RunSnapshot.webUrl`（登录链接，本来就是给用户点的） | ① 终态 journal（写盘 choke point + 读回净化双重保证）<br>② 日志、③ 错误文本、④ `doctor`/driver 输出、⑤ README/SKILL/docs/夹具 |
+
+**残余风险（不粉饰）**：攻击者若能在**服务存活期间**读到那个非终态 journal 文件，就等于拿到一个有效 token——与直接读 DSH 自身数据等价。本次把窗口从"永久"缩到"运行存活期间"，**不是消除**。Windows 上没有 POSIX 位（实测 Node 报 `0666`），那里的保护依赖目录 ACL，`0600` 断言做成自校准；历史遗留的旧格式 journal 不会被自动改写，只在读回时净化。

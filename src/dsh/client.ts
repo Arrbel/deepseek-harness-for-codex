@@ -12,11 +12,13 @@ import {
   classifyHttpStatus,
   describeParseFailure,
   isRpcEnvelope,
+  parseExpectedType,
   parseFailurePath,
   rpcErrorCode,
   rpcErrorMessage,
   type WireFailureKind,
 } from "./wire.js";
+import { recordDrift } from "./drift.js";
 import type { HistoryEvent, SessionPage } from "./types.js";
 import { readSetCookieHeader, redactLaunchToken, rememberCookie } from "../service/credentials.js";
 import { isLoopbackUrl } from "../policy/trusted-input.js";
@@ -215,12 +217,15 @@ export class DshClient {
     } catch (error) {
       // An invalid request is also a contract mismatch, and it must name the field the same way
       // a response drift does — a raw validator error escapes this module unclassified otherwise.
+      const path = wirePath(REQUEST_ANCHOR, parseFailurePath(error));
+      // Telemetry keeps only `typeNameOf(args)`; the args themselves may hold a token.
+      recordDrift({ kind: "protocol-drift", method, path, expectedType: parseExpectedType(error), gotValue: args });
       throw new DshRpcError(
         `${method} failed: the request does not match the contract (${describeParseFailure(error)}).`,
         {
           kind: "protocol-drift",
           method,
-          path: wirePath(REQUEST_ANCHOR, parseFailurePath(error)),
+          path,
           cause: error,
         },
       );
@@ -261,12 +266,16 @@ export class DshClient {
       return METHODS[method].response.parse(body.result.value) as ResOf<M>;
     } catch (error) {
       // The JSON path is the actionable part of "the contract changed" (ADR-0003 §3.2).
+      const path = wirePath(RESPONSE_ANCHOR, parseFailurePath(error));
+      // Telemetry keeps only `typeNameOf(body.result.value)`: the value can carry model output, a
+      // token echoed by the Host, or a whole prompt, and none of that may reach the log.
+      recordDrift({ kind: "protocol-drift", method, path, expectedType: parseExpectedType(error), gotValue: body.result.value });
       throw new DshRpcError(
         `${method} failed: the Host answered with a value that drifts from the contract (${describeParseFailure(error)}).`,
         {
           kind: "protocol-drift",
           method,
-          path: wirePath(RESPONSE_ANCHOR, parseFailurePath(error)),
+          path,
           cause: error,
         },
       );

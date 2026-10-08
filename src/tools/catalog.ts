@@ -227,7 +227,7 @@ export const TOOLS: readonly ToolSpec[] = [
     name: "list_runs",
     title: "List local DeepSeek Harness runs",
     description:
-      "List runs started by the current MCP server process, including session IDs Codex may choose to continue in a later start_run call.",
+      "List runs started by the current MCP server process, including runs adopted from a previous MCP server process (recovered from the run journal) and the session IDs Codex may choose to continue in a later start_run call.",
     input: {},
     behavior: "read-only",
     result: "runs",

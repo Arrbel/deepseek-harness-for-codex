@@ -354,12 +354,16 @@ flowchart LR
         VL["versions/.install.lock<br/>并发安装锁"]
         SH["services/&lt;workspace-hash&gt;/<br/>DSH_HOME（会话数据，DSH 自己管理）"]
         PID["services/&lt;hash&gt;/dsh.pid<br/>{pid, port, binPath, startedAt}<br/>证据，不是配置：身份不可证则不杀"]
-        LG["logs/<br/>(尚未创建：R3-2 的漂移遥测才会落盘)"]
+        JN["services/&lt;hash&gt;/runs/&lt;runId&gt;.json<br/>运行 journal（.tmp+rename，0600）<br/>非终态含完整 webUrl；终态去 token"]
+        LK["services/&lt;hash&gt;/runs/.adopt.lock<br/>跨进程对账锁（抢不到则整轮跳过）"]
+        LG["logs/drift.jsonl<br/>漂移遥测：只存指针字段<br/>（第一条记录才创建目录）"]
     end
     PRUNE["prune：只删「非当前 pin 且未被在用服务引用」的版本目录"]
     V -.-> PRUNE
     VT -.-> PRUNE
     PRUNE -->|"证据不可读/身份不可证 → 该轮一个版本目录都不删"| V
 ```
+
+`dsh.pid` 是**进程**证据，`runs/*.json` 是**运行态**证据：MCP host 崩溃后，下一次工具调用会按 journal 对账——服务仍活则**收养**（保持 `running` 并从 `lastEventSeq` 继续），服务已死则 `failed(service-unreachable)`，会话空闲但日志缺 `turn/end` 则复用既有 fail-closed 规则判 `failed`。对账是**唯一**写终态的路径（仍走 `settle()`，因此 `RunStatus` 不新增成员），且抢不到 `.adopt.lock` 就整轮跳过——不替别人的运行下结论。
 
 `dsh.pid` 是**唯一的进程证据**：`alive`（命令含我们的 `bin.js` 与 `--port`）→ `start_service` 会回收；`unverified`（进程活着但身份不可证）→ **永不按 pid 盲杀**（PID 复用会误杀别人的进程）；`stale-pidfile`（进程已退出或文件损坏）→ 仅作为提示出现在 `doctor.orphans`，不阻塞 `ready`。

@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { CONTRACT_MATRIX, classifyContract, type ContractReport } from "../../src/dsh/matrix.js";
 import {
   DEFAULT_HARNESS_PACKAGE,
   DEFAULT_INSTALL_TIMEOUT_MS,
@@ -168,6 +169,9 @@ describe("doctor (inspectRuntime)", () => {
       npmFound: false,
       dataDirectory: writableNowhere,
       runtimePackage: unparseable,
+      // No version resolves out of an unparseable spec, so the contract verdict is `unknown` and
+      // must not add a fifth problem.
+      contract: classifyContract(null),
     });
 
     expect(problems).toHaveLength(4);
@@ -186,6 +190,7 @@ describe("doctor (inspectRuntime)", () => {
       npmFound: true,
       dataDirectory: { path: "C:\\data", source: "default", exists: false, writable: "unknown" },
       runtimePackage: { ...unparseable, spec: "@deepseek-ai/dsh@0.2.1-alpha.1", error: null },
+      contract: classifyContract("0.2.1-alpha.1"),
     })).toEqual([]);
   });
 });
@@ -331,5 +336,75 @@ describe("doctor.permission mirrors the Harness approval policy without touching
     expect(report.permission).toEqual(permissionReport({}));
     // Same four-term composition as before this field existed.
     expect(report.ready).toBe(problems.length === 0);
+  });
+});
+
+describe("doctor.contract reports the matrix verdict without widening the prerequisites (R3-1)", () => {
+  function reportFor(harnessPackage?: string): { ready: boolean; problems: string[]; contract: ContractReport } {
+    const env: NodeJS.ProcessEnv = { DSH_MCP_DATA_DIR: scratch() };
+    if (harnessPackage !== undefined) env["DSH_MCP_HARNESS_PACKAGE"] = harnessPackage;
+    const report = inspectRuntime(env);
+    return {
+      ready: report.ready as boolean,
+      problems: report.problems as string[],
+      contract: report.contract as ContractReport,
+    };
+  }
+
+  it("reports the recorded line as exact", () => {
+    const { ready, problems, contract } = reportFor(`@deepseek-ai/dsh@${CONTRACT_MATRIX[0]!.recordedVersions[0]!}`);
+
+    expect(contract).toMatchObject({
+      dshLine: CONTRACT_MATRIX[0]!.dshLine,
+      installedVersion: CONTRACT_MATRIX[0]!.recordedVersions[0],
+      status: "exact",
+      baselineDshLine: CONTRACT_MATRIX[0]!.dshLine,
+    });
+    expect(contract.differences).toEqual({});
+    expect(typeof contract.detail).toBe("string");
+    expect(ready).toBe(true);
+    expect(problems).toEqual([]);
+  });
+
+  it("never lets `compatible` or `unknown` touch `problems` or `ready`", () => {
+    // `compatible`: another version on a recorded line (the surface is assumed unchanged).
+    const compatible = reportFor("@deepseek-ai/dsh@0.2.1");
+    expect(compatible.contract).toMatchObject({ dshLine: "0.2.1", status: "compatible" });
+    expect(compatible.ready).toBe(true);
+    expect(compatible.problems).toEqual([]);
+
+    // `unknown`: nothing resolved, which is the normal state before the first install. The spec is
+    // unusable here, so the *existing* spec problem is the only one — the contract adds nothing.
+    const unknown = reportFor("@deepseek-ai/dsh@latest");
+    expect(unknown.contract).toMatchObject({ dshLine: null, status: "unknown" });
+    expect(unknown.ready).toBe(false);
+    expect(unknown.problems).toHaveLength(1);
+    expect(unknown.problems[0]).toContain("is invalid");
+    expect(unknown.problems.join(" ")).not.toContain("contract");
+
+    // And the same holds with no version problem at all: no override, so the default pin resolves.
+    const defaulted = inspectRuntime({ DSH_MCP_DATA_DIR: scratch() });
+    expect((defaulted.contract as ContractReport).status).toBe("exact");
+    expect(defaulted.ready).toBe(true);
+    expect(defaulted.problems).toEqual([]);
+  });
+
+  it("fails readiness only for a version line whose wire was never recorded", () => {
+    const unsupported = reportFor("@deepseek-ai/dsh@9.9.9");
+
+    expect(unsupported.contract).toMatchObject({ dshLine: "9.9.9", status: "unsupported" });
+    expect(unsupported.ready).toBe(false);
+    expect(unsupported.problems).toHaveLength(1);
+    expect(unsupported.problems[0]).toContain("9.9.9");
+    expect(unsupported.problems[0]).toContain("DSH_MCP_HARNESS_PACKAGE");
+    // The detail names the lines we do know, so the message is actionable rather than a dead end.
+    expect(unsupported.contract.detail).toContain(CONTRACT_MATRIX[0]!.dshLine);
+  });
+
+  it("keeps the contract verdict a pure function of the resolved version", () => {
+    // Same input, same verdict — and the recipe is the matrix, not the environment.
+    expect(classifyContract("0.2.1-alpha.1")).toEqual(classifyContract("0.2.1-alpha.1"));
+    expect(classifyContract("9.9.9").differences).toBeNull();
+    expect(classifyContract("0.2.1-alpha.1").differences).not.toBeNull();
   });
 });

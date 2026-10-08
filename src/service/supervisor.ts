@@ -22,7 +22,7 @@ import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_FORCE_STOP_GRACE_MS, DEFAULT_POLL_INTERVAL_MS, DEFAULT_READINESS_POLL_MS, DEFAULT_STOP_GRACE_MS, resolveAllowedRoots, resolveHarnessPackage, resolveInstallTimeoutMs, resolveStartupTimeoutMs } from "../config/resolve.js";
-import { dataLocationProblems } from "../policy/paths.js";
+import { dataLocationProblems, samePath } from "../policy/paths.js";
 import {
   identityOwnsRecord,
   orphanState,
@@ -226,6 +226,35 @@ export class ServiceSupervisor {
   /** Lists services owned by the current MCP server. */
   public list(): ServiceSnapshot[] {
     return [...this.services.values()].map((service) => this.snapshot(service));
+  }
+
+  /**
+   * The data directory every service home lives under.
+   *
+   * Read by the run journal (R3-3): per-run records live in
+   * `<dataDirectory>/services/<key>/runs/<runId>.json`, so a later MCP process must be able to
+   * find them without being handed the path twice.
+   */
+  public getDataDirectory(): string {
+    return this.dataDirectory;
+  }
+
+  /** The per-workspace service home of a known service (the journal's root, R3-3). */
+  public serviceHomeOf(serviceId: string): string | null {
+    return this.services.get(serviceId)?.serviceHome ?? null;
+  }
+
+  /** Every service home this process knows about (one per workspace it served). */
+  public serviceHomes(): string[] {
+    return [...new Set([...this.services.values()].map((service) => service.serviceHome))];
+  }
+
+  /** The live, running service for a workspace, or `null` when this process has none. */
+  public runningServiceForWorkspace(workspace: string): ServiceRecord | null {
+    for (const service of this.services.values()) {
+      if (service.status === "running" && samePath(service.workspace, workspace)) return service;
+    }
+    return null;
   }
 
   /** Stops one Web service. Idempotent: every state converges. */

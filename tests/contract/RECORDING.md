@@ -1,10 +1,16 @@
 # Re-recording the contract fixtures
 
-`tests/fixtures/recorded/*.json` is a desensitized capture of the published
-`@deepseek-ai/dsh@0.2.1-alpha.1` Web surface. It is replayed through the real
+`tests/fixtures/recorded/<dshLine>/` is a desensitized capture of the published
+`@deepseek-ai/dsh@0.2.1-alpha.1` Web surface; `tests/fixtures/recorded/current.json` is the
+pointer to the line the suite replays today. It is replayed through the real
 `RunManager` by `tests/fixtures/fake-harness.mjs` when `FIXTURE_RECORDED` points
-at the directory, so a wire change shows up as a failing local projection rather
+at the line directory, so a wire change shows up as a failing local projection rather
 than as a silent fixture drift.
+
+Each DSH version line gets **one** directory holding its capture. A new line adds a directory
+and moves the pointer — it never copies the previous line's files: the differences between lines
+are written down in `CONTRACT_MATRIX` (`src/dsh/matrix.ts`), which is what `doctor.contract`
+reports against.
 
 ## Procedure
 

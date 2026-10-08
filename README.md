@@ -189,6 +189,7 @@ codex mcp add deepseek-harness -- npx --yes --package=deepseek-harness-for-codex
 | `DSH_MCP_NPM_CLI` | 由 `process.execPath` 推导 | `npm-cli.js` 的**绝对路径**。npm 始终以 `node <该文件> install …` + `shell:false` 调用（不经过 `npm.cmd`，因此没有 shell 注入面）；只有自动推导失败时才需要手动设置，相对路径或文件不存在会立即报错。 |
 | `DSH_MCP_INSTALL_TIMEOUT_MS` | `900000` | 运行时包的一次性安装预算；与启动预算相互独立（安装进度输出会重置它）。 |
 | `DSH_MCP_STARTUP_TIMEOUT_MS` | `180000` | 启动到打印 URL 的**静默**预算：子进程每产生一行输出就重置，有进展不算超时，只有完全静默才失败。 |
+| `DSH_MCP_RUN_LIMIT` | `4` | 每进程同时运行的上限（跨工作区；**同一数据目录的单个 MCP 进程内**，同一工作区只允许一个）。越界**拒绝并给出可操作错误**而不是排队——不产生运行记录，因此没有 `queued` 状态。**该上限与工作区串行都是进程内的**：两个 MCP 进程指向同一数据目录时各自计数（跨进程共享额度明确不做；跨进程的安全约束来自服务结构与 `runs/.adopt.lock`）。 |
 | `DSH_MCP_WORKSPACE_ROOTS` | 不限制 | `start_run` 允许使用的绝对根目录列表，使用当前平台的路径分隔符。 |
 | `DSH_PERMISSION_MODE` | `workspace-write` | DSH 权限模式。**默认值会映射为 `approval: ask`**：需要写文件/执行命令的动作会在 Harness 页面等人工批准，而 MCP 面无法代答（见 `docs/operations.md` §7）。`read-only` 用于审查类任务；只有 `danger-full-access` 会变成 `approval: never`，必须由调用方显式传入。`doctor.permission` 会报告实际生效的模式、来源与审批策略。 |
 | `DSH_TELEMETRY_DISABLED` | `1` | 传给 Harness 子进程；默认关闭遥测。 |
@@ -229,6 +230,7 @@ Harness 子进程默认关闭遥测。Web 服务只绑定回环地址并自动�
 | `apiKeyInEnvironment` | 宿主环境里是否可见 `DEEPSEEK_API_KEY`：**只报告布尔值**，既不读取也不回显其内容。 |
 | `allowedWorkspaceRoots` | `DSH_MCP_WORKSPACE_ROOTS` 的解析结果：**未配置时为 `[]`**（空数组就是"不限制"的表示，不是 `null`）；配置后为按平台分隔符切分出的根路径数组（合法性仍在 `start_run` 时按工作区策略校验）。 |
 | `permission` | `{mode, source, approval, advisory}`：下一次启动 Harness 会用到的权限模式。`source`：`env`（你显式设了 `DSH_PERMISSION_MODE`）或 `default`（未设置 → `workspace-write`）；`approval`：按 DSH 自身策略推导（只有 `danger-full-access` 是 `never`，其余都是 `ask`）；`advisory`：`ask` 时给出可操作说明（需要人工在 Harness 页面点批准，MCP 面无法代答），`never` 时为 `null`。**它是报告项，不是前置条件**：不会改变 `ready`。 |
+| `contract` | 契约版本矩阵的判定：`dshLine`（版本线）、`installedVersion`（解析出的完整版本，未解析时为 `null`）、`status`（`exact`／`compatible`／`unknown`／`unsupported`）、`baselineDshLine`、`recordedVersions`、`differences`（相对 baseline 的差异；未知版本线为 `null`）、`detail`。只有 `unsupported` 会进入 `problems` 并影响 `ready`（`unknown` 是"还没装"的正常状态，刻意不算失败）。 |
 | `surface` | 本服务提供的交互面，当前恒为 `web`。 |
 
 ## 排障

@@ -9,6 +9,8 @@ import type { HarnessLaunch } from "../service/launch.js";
 import { openInDefaultBrowser } from "../service/browser.js";
 import { DEFAULT_POLL_INTERVAL_MS, resolveAllowedRoots, resolveDataDirectory, resolveHarnessPackage, resolveInstallTimeoutMs, resolveStartupTimeoutMs } from "../config/resolve.js";
 import { inspectRuntime } from "../diagnostics/doctor.js";
+import { configureDriftTelemetry } from "../dsh/drift.js";
+import { versionOfSpec } from "../dsh/matrix.js";
 import type { ChildProcess } from "node:child_process";
 import { join } from "node:path";
 
@@ -82,6 +84,14 @@ export class HarnessContainer implements OrchestrationContainer {
     };
     this.supervisor = new ServiceSupervisor(supervisorOptions);
     this.orchestrator = new RunOrchestrator(this.supervisor, { pollIntervalMs: this.pollIntervalMs }, allowedRoots);
+    // R3-2: drift telemetry is wired here because this is the only layer that resolves
+    // configuration. It stores nothing until a drift actually happens, and the sink is a no-op
+    // when `DSH_MCP_DRIFT_LOG` disables it — so a process that never drifts never creates `logs/`.
+    configureDriftTelemetry({
+      dataDirectory: this.dataDirectory,
+      dshVersion: versionOfSpec(supervisorOptions.harnessPackage),
+      env,
+    });
   }
 
   // --- service surface ------------------------------------------------------------------

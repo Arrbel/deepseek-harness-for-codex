@@ -113,6 +113,10 @@ describe("Harness run orchestration through the container", () => {
 
     it("reuses one Web service for later tasks in the workspace", async () => {
       const first = await manager.start({ task: "first", workspace });
+      // R3-4: one run per workspace at a time. Let the first turn finish, then the *next* task in
+      // the same workspace is served by the same Web service (the pre-R3-4 behaviour of starting
+      // both back-to-back was implicit concurrency, which `start_run` now refuses explicitly).
+      expect((await manager.wait(first.runId, 2_000)).status).toBe("succeeded");
       const second = await manager.start({ task: "second", workspace });
 
       expect(second.serviceId).toBe(first.serviceId);

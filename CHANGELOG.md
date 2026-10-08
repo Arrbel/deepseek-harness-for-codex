@@ -28,6 +28,24 @@
 
 系统化改造的进度以 `docs/roadmap.md` 为准；架构约束见 `docs/architecture.md`。
 
+### Added（Wave R3：韧性、可恢复性与并发）
+
+- **`doctor.contract`（第 20 个顶层字段）与契约版本矩阵**：wire 适配按 **DSH 版本线**声明（`src/dsh/matrix.ts` 的 `CONTRACT_MATRIX`，只有 baseline 带完整形状，其余行只记差异），录制夹具按版本线分档（`tests/fixtures/recorded/<dshLine>/` + `current.json` 指针，**只有一份录制集**）。`status` 四态：`exact`/`compatible`/`unknown`（尚未安装——**正常状态**）/`unsupported`。纪律：**只有 `unsupported` 会影响 `problems`/`ready`**，由唯一判据 `contractBlocksReadiness` 决定，`unknown` 刻意不算失败（否则每个全新安装都会显示不可用）。
+- **漂移遥测 `<数据目录>/logs/drift.jsonl`**：形状不符时落一条**指针级**记录（`ts/kind/method/path/expected/gotType/pluginVersion/dshVersion/runId?`）——**不含** message 原文、token、cookie、prompt 或模型输出；载荷只以**类型名**离场，`method` 走白名单，写盘前再过统一脱敏，且返回与落盘是同一对象。目录由**第一条记录**按需创建（启用后从未漂移 → 不建空目录）；`DSH_MCP_DRIFT_LOG=0` 关闭；写入失败静默降级。
+- **运行态持久化与启动对账**：每次运行在该工作区服务目录下留 journal（`services/<hash>/runs/<runId>.json`，`.tmp` + rename 原子写）。MCP host 崩溃/重启后，下一次工具调用会按 journal 对账：服务仍活 → **收养**（保持 `running`，从 journal 的 `lastKnownSeq` 恢复进度）；服务已死 → `failed(service-unreachable)`（同时 `webUrlStale: true`）；会话空闲但日志缺 `turn/end` → 复用既有 fail-closed 规则判 `failed`（**绝不写成 `succeeded`**）。跨进程安全由 `runs/.adopt.lock` 保证：**抢不到锁就整轮跳过**，不替别人的运行下结论。**`RunStatus` 不新增成员**（对账仍只经 `settle()` 写终态）。
+- **`DSH_MCP_RUN_LIMIT`（默认 `4`）与并发门**：同一工作区同时只允许一个运行，跨工作区受该上限约束。越界**拒绝而不是排队**，错误里给出 `wait_run`/`get_run`/`cancel_run` 的可操作指引，且**不产生运行记录**（因此没有 `queued` 状态，`RunStatus` 语义不变）；`settle()` 到终态立即释放槽位；对账收养的运行同样占位，但**收养本身不受门限制**（否则会重造"永久 running"）。上限是**每进程**的，跨进程共享额度明确**不做**。
+- **`npm run coverage`（非门禁）与定向属性测试**：新增 `@vitest/coverage-v8` 与覆盖率基线（分层报告见 `reports/r3-coverage-and-properties.md`）；`tests/property/**` 4 组属性测试（`wire` 分类全函数性、引擎区间单调性、活动重置预算、`settle` 幂等）。**刻意不接入 `npm run check`**，也不设覆盖率阈值——属性测试买的是不变量，不是数字。
+
+### Fixed（Wave R3）
+
+- **并发准入的 check-then-act 竞态**（由独立验证发现，严重度：高）。两个**并发**的 `start_run` 在"检查占用"与"登记运行"之间交错，导致**同一工作区同时有两个运行**被准入：`DSH_MCP_RUN_LIMIT` 在并发下不再是上限，磁盘上留下**两条同工作区 `running` 记录**（而对账会扫描所有工作区，等于把一次瞬时竞态变成持久错误）；被拒调用本应"不产生运行记录"，却在竞态下产生了记录。现在改为**同步原子预留**：判定与占位发生在**同一个同步块**内、且在**任何 `await` 之前**，全部 `await` 都在持有预留下进行，`finally` 释放（早退/异常都不留占位）。预留**不是**运行记录——不进 `list_runs`/`get_run`、不写 journal，因此"没有 `running` 记录就没有 `queued`"这条口径继续成立，`RunStatus` 仍是四项。工作区键用 `realpathSync` 归一化，同一真实目录的不同写法（`…\ws`、`…\ws\`、`…\ws\.`、`…\ws\..\ws`、大小写变体）在任何 `await` 前就收敛为同一个键。
+- **并发上限与工作区串行是"进程内"的，现在文档也这么说**：三处文档原先把"同一工作区只允许一个"写成无限定的绝对表述，而原子预留是实例内的 `Map`（没有跨进程协调）。`README.md`/`README.en.md`/`docs/configuration.md` 已明确限定为"同一数据目录的单个 MCP 进程内"，并写明跨进程共享额度**不做**、跨进程的安全约束来自服务结构与 `runs/.adopt.lock`（N-R3-3，独立验证提出）。
+- **防御性去重：磁盘上若出现同一 `sessionId` 的多条非终态记录**（历史竞态产物，修复后不会再产生），对账只让**最新**的一条参与收养/结算，旧的收敛为 `failed(turn-unknown:superseded-duplicate-journal)`（`error` 指名取代它的 runId），**不留下任何非终态证据**；"最新"由全序决定（`startedAt`↓ → `lastKnownSeq`↓ → `runId`↑），不依赖目录遍历顺序。理由使用既有开放形态，故不新增闭集 reason、`nextAction` 仍为 `report-only`。
+- **`classifyThrownFailure` 不再对合法的异常值抛异常**：`thrownText` 的兜底曾是 `String(error)`，而 `String([Symbol()])` 会抛（`Array.prototype.join` 用 ToString 转换元素，符号被拒），于是一个"可分类"的异常值逃出了分类器。现在由一个**永不抛**的渲染器（符号感知 + 递归 + 兜底 `unprintable value`）处理，`classifyThrownFailure` 对任意值都给出文本（属性测试 `wire-totality` 的排除项因此消失）。
+- **`message` 保证非空**：字段文档写明"never empty"，但抛 `""` 或 `message`/`name` 皆空的 `Error` 会产出空串。现在两处入口都有显式非空兜底（`unrecognized value`）。
+- **删除逐字节重复的死代码**：`src/service/runtime-package.ts` 曾保有一份与 `service/npm-cli.ts` **34 行逐字节相同**的 `findNpmCli`/`resolveNpmCli`，且**全仓无人导入**——一份无人到达的副本比没有副本更糟，它诱使未来在错误的文件里修 bug（由 R3-6 的覆盖率工作发现）。现在只有 `service/npm-cli.ts` 一份实现。
+- **凭据落盘按生命周期收口**：journal 的**终态**记录只保留 `origin + path`（写盘 choke point + 读回净化双重保证），**非终态**记录保留完整链接（token 此时本就在生效，收养后仍要能给出可点击链接）。`0600` 有断言（Windows 无 POSIX 位，断言自校准）。残余风险如实记录在 `docs/operations.md` §8.3：能在服务存活期间读到非终态文件者等于拿到有效 token（与读 DSH 自身数据等价）——**窗口从"永久"缩到"运行存活期间"，不是消除**。
+
 ### Added（Wave R2：使用体验与可诊断性）
 
 - **`RunSnapshot.nextAction`（失败恢复建议）**：由 `reason` **单向派生**的闭集动作（`relogin` / `restart-service` / `new-session` / `retry-narrower` / `report-only` / `none`），非 `failed` 时为 `none`。开放形态（`rpc:<code>` / `turn-aborted:<cause>` / `turn-unknown:<kind>`）**一律 `report-only`**——不确定的原因不猜恢复动作（失败词典见 `docs/operations.md` §4；`NEXT_ACTION_BY_REASON` 用 `satisfies Record<ClosedFailureReason, RunAction>` 约束，新增闭集 reason 忘配动作是**编译错误**）。刻意**不自动执行**：唯一自动重试仍是既有的 `auth` 换 cookie 一次。
