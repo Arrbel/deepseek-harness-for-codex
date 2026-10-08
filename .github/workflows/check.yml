@@ -1,0 +1,67 @@
+name: check
+
+# Hermetic gate: no network beyond `npm ci`, no credentials, no live DSH.
+# This is the same command maintainers run locally (`npm run check`), including the
+# metadata gate that keeps every generated version fact in sync with package.json.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows carries the platform-specific paths that have been audited before
+        # (process-tree teardown, hidden console, workspace ACL marks), so it must be
+        # exercised. Node 24 is covered on the cheaper Linux runner.
+        include:
+          - os: windows-latest
+            node: "22.x"
+          - os: ubuntu-latest
+            node: "22.x"
+          - os: ubuntu-latest
+            node: "24.x"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          # Cache the download cache only; never node_modules (that would hide lock drift).
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node${{ matrix.node }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node${{ matrix.node }}-
+
+      - name: Install from the lockfile
+        run: npm ci
+
+      - name: Run the full gate (typecheck, tests, metadata, build, self-contained probe)
+        run: npm run check
+
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-${{ matrix.os }}-node${{ matrix.node }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            dist/
+            plugins/deepseek-harness/

@@ -1,0 +1,77 @@
+name: live DSH smoke
+
+# Manually triggered only. This job installs the exact DSH runtime from the registry
+# (about 486 MB, ~1 minute of disk-bound install), starts the real Web host, drives the
+# CLI-visible workspace/session flow, and stops it again. It therefore:
+#   * needs network access and roughly 1 GB of free scratch disk;
+#   * can be flaky when the registry or the local disk is slow — a failure here is
+#     informational, not a merge blocker (the hermetic `check` workflow is the gate);
+#   * must never need a DEEPSEEK_API_KEY: the keyless path ends in a `turn/end` error,
+#     which is exactly what the smoke asserts.
+#
+# NOTE: `npm run check:live` is a no-op without `DSH_LIVE=1`, because the live suite is
+# gated behind that variable so the default `npm test` never touches the network. This
+# workflow sets it explicitly. (Making the script set it itself is tracked as a roadmap
+# follow-up: a dedicated vitest config for the live suite would remove the footgun.)
+on:
+  workflow_dispatch:
+    inputs:
+      dsh_package:
+        description: "Exact DSH runtime spec to install (name@x.y.z, no ranges)"
+        required: false
+        default: "@deepseek-ai/dsh@0.2.1-alpha.1"
+        type: string
+
+concurrency:
+  group: live-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: live smoke (windows)
+    # Windows is where the process-tree teardown and hidden-console behavior live.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      DSH_LIVE: "1"
+      DSH_MCP_HARNESS_PACKAGE: ${{ inputs.dsh_package }}
+      # Keep the runtime install inside the (git-ignored) scratch directory so the whole
+      # smoke state can be uploaded as one artifact. `runner` is not an allowed context in
+      # job-level env, so this uses `github.workspace` instead.
+      DSH_MCP_DATA_DIR: ${{ github.workspace }}\.verify-scratch\live-data
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-live-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-live-${{ runner.os }}-
+
+      - name: Install from the lockfile
+        run: npm ci
+
+      - name: Prepare the plugin payload and run the hermetic gate first
+        run: npm run prepare:plugin
+
+      - name: Run the live DSH smoke
+        run: npm run check:live
+
+      - name: Upload live smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-smoke-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            .verify-scratch/

@@ -1,0 +1,19 @@
+{
+  "name": "recorded-dsh-wire",
+  "version": "0.2.1-alpha.1",
+  "capturedAt": "2026-10-08T13:49:51.421Z",
+  "generator": ".verify-scratch/test-foundation/capture.mjs",
+  "desensitizer": ".verify-scratch/test-foundation/desensitize.mjs",
+  "files": [
+    "contract.json",
+    "projections-after.json",
+    "projections-start.json",
+    "session-list.json",
+    "session-page.json"
+  ],
+  "authority": {
+    "turnEndReasons": "deepseek-harness/packages/core/session/src/types.ts:201-229",
+    "assistantMessage": "deepseek-harness/packages/core/session/src/types.ts:341-349",
+    "paginate": "deepseek-harness/packages/api/session-controller/src/history.ts:392-427"
+  }
+}

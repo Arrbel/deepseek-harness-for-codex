@@ -1,11 +1,13 @@
 #!/usr/bin/env node
+// bin entry: stdio transport assembly plus process-signal handling. No orchestration logic
+// lives here — the container owns the lifecycle and every tool lives in `tools/catalog.ts`.
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { RunManager } from "./run-manager.js";
-import { createMcpServer } from "./server.js";
+import { HarnessContainer } from "./app/container.js";
+import { createMcpServer } from "./tools/register.js";
 
-const manager = new RunManager();
-const server = createMcpServer(manager);
+const container = new HarnessContainer();
+const server = createMcpServer(container);
 const transport = new StdioServerTransport();
 let closing = false;
 
@@ -14,15 +16,15 @@ async function close(): Promise<void> {
     return;
   }
   closing = true;
-  await manager.close();
+  await container.dispose();
   await server.close();
 }
 
-server.server.onclose = () => void manager.close();
+server.server.onclose = () => void container.dispose();
 process.once("SIGINT", () => void close());
 process.once("SIGTERM", () => void close());
 process.once("SIGHUP", () => void close());
-process.once("beforeExit", () => void manager.close());
+process.once("beforeExit", () => void container.dispose());
 
 try {
   await server.connect(transport);

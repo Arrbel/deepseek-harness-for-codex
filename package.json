@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-for-codex",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Codex plugin for delegating work to visible local DeepSeek Harness sessions and independently reviewing the results.",
   "type": "module",
   "bin": {
@@ -8,6 +8,9 @@
   },
   "files": [
     "dist/",
+    ".codex-plugin/",
+    ".mcp.json",
+    "skills/",
     "README.md",
     "README.en.md",
     "assets/",
@@ -32,10 +35,16 @@
   },
   "packageManager": "npm@10.9.4",
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && node scripts/version-sync.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm run test && npm run build",
+    "version:sync": "node scripts/version-sync.mjs",
+    "version:check": "node scripts/version-sync.mjs --check",
+    "check-metadata": "node scripts/check-metadata.mjs",
+    "check": "npm run typecheck && npm run test && npm run check-metadata && npm run build && node scripts/check-metadata.mjs --self-contained",
+    "check:live": "node scripts/check-live-guard.mjs && vitest run tests/e2e/live.test.ts --reporter=verbose",
+    "prepare:plugin": "npm run version:sync && npm run check",
+    "prepack": "npm run check",
     "release:check": "npm run check && npm pack --dry-run",
     "prepublishOnly": "npm run check"
   },

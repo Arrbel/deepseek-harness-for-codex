@@ -1,0 +1,184 @@
+{
+  "provenance": {
+    "package": "@deepseek-ai/dsh@0.2.1-alpha.1",
+    "surface": "dsh web --no-open --port 0",
+    "capturedAt": "2026-10-08T13:49:51.421Z",
+    "capturedBy": ".verify-scratch/test-foundation/capture.mjs",
+    "workspace": "throwaway DSH_HOME + .verify-scratch workspace, no API key",
+    "desensitized": "ids replaced, environment-derived long text truncated, launch token and session cookie never copied"
+  },
+  "launch": {
+    "readyLineMatches": "dsh web: http://127.0.0.1:<port>/?token=<one-time-token>",
+    "tokenLength": 43,
+    "exchangeHttp": 303,
+    "location": "./",
+    "setCookiePresent": true,
+    "setCookieNameIsDynamic": true,
+    "setCookieAttributes": "RECORDED_COOKIE_NAME=<cookie-value>; Max-Age=2592000; Path=/; Expires=Sat, 07 Nov 2026 13:50:00 GMT; HttpOnly; SameSite=Strict",
+    "firstSegmentSentBackAsCookie": "RECORDED_COOKIE_NAME=<cookie-value>"
+  },
+  "unauthenticated": {
+    "bareRootGet": 401,
+    "rpcWithoutCookie": {
+      "http": 401,
+      "body": "unauthorized"
+    }
+  },
+  "workspace": {
+    "createValueKeys": [
+      "createdAt",
+      "path",
+      "sessionIds",
+      "title",
+      "updatedAt",
+      "workspaceId"
+    ],
+    "created": true
+  },
+  "session": {
+    "createValueKeys": [
+      "agentPreset",
+      "sessionId"
+    ],
+    "workingDirectoryShape": {
+      "sessionId": "session-id-RECORDED-0008",
+      "agentPreset": "standard"
+    }
+  },
+  "projections": {
+    "freshAsOfSeq": 2,
+    "afterPromptAsOfSeq": 18,
+    "valueKeys": [
+      "agentPreset",
+      "contextBreakdown",
+      "contextPressure",
+      "goal",
+      "imageLimits",
+      "inbox",
+      "modelSelection",
+      "permissions",
+      "plan",
+      "sessionListMetadata",
+      "sessionStats",
+      "subagent",
+      "subagentCatalog",
+      "subagentTiming",
+      "title",
+      "todos",
+      "tokenUsage",
+      "turnOutline",
+      "userQuestions"
+    ],
+    "unknownSession": null
+  },
+  "pagination": {
+    "fullPage": {
+      "recordCount": 19,
+      "hasMore": false
+    },
+    "windowOne": {
+      "step": "page.window.first-value",
+      "at": "2026-10-08T13:50:02.552Z",
+      "hasMore": true,
+      "firstSeq": 10,
+      "lastSeq": 18,
+      "types": [
+        "user/message",
+        "user/message",
+        "request/header",
+        "request/context",
+        "session/title",
+        "session/title-llm-request",
+        "assistant/attempt",
+        "step/end",
+        "turn/end"
+      ]
+    },
+    "windowTwo": {
+      "step": "page.window.second-value",
+      "at": "2026-10-08T13:50:02.556Z",
+      "hasMore": true,
+      "firstSeq": 8,
+      "lastSeq": 9,
+      "types": [
+        "user/message",
+        "user/message"
+      ]
+    },
+    "badThroughSeq": {
+      "ok": false,
+      "error": {
+        "code": "gateway/bad-request",
+        "message": "session page through seq 99999 is past cursor 18",
+        "details": {}
+      }
+    },
+    "badBeforeSeq": {
+      "ok": false,
+      "error": {
+        "code": "gateway/bad-request",
+        "message": "beforeSeq must be a non-negative safe integer",
+        "details": {}
+      }
+    },
+    "badMaxMessages": {
+      "ok": false,
+      "error": {
+        "code": "gateway/bad-request",
+        "message": "maxMessages must be a positive safe integer",
+        "details": {}
+      }
+    },
+    "beyondEnd": "session page through seq 99999 is past cursor 18"
+  },
+  "turnEnd": {
+    "event": {
+      "type": "turn/end",
+      "seq": 18,
+      "time": 1791467401148,
+      "data": {
+        "turn": 1,
+        "reason": {
+          "kind": "error",
+          "error": {
+            "message": "llm-deepseek: no API key for provider route \"deepseek-official\"; store DEEPSEEK_API_KEY through the credentials service (the web Models page writes it), or export DEEPSEEK_API_KEY in the launching environment",
+            "code": "MISSING_CREDENTIAL"
+          }
+        }
+      }
+    }
+  },
+  "assistantAttempt": {
+    "event": {
+      "type": "assistant/attempt",
+      "seq": 16,
+      "time": 1791467401146,
+      "data": {
+        "turn": 1,
+        "step": 1,
+        "stream": [
+          {
+            "type": "chunk",
+            "time": 1791467401145,
+            "chunk": {
+              "type": "finish",
+              "reason": {
+                "kind": "error",
+                "failure": {
+                  "message": "llm-deepseek: no API key for provider route \"deepseek-official\"; store DEEPSEEK_API_KEY through the credentials service (the web Models page writes it), or export DEEPSEEK_API_KEY in the launching environment",
+                  "code": "MISSING_CREDENTIAL"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "cancel": {
+    "acceptedValue": {
+      "accepted": true
+    },
+    "note": "The keyless turn settled before cancel, so no live aborted turn/end could be captured; the aborted reason contract comes from packages/core/session/src/types.ts:201-229."
+  }
+}

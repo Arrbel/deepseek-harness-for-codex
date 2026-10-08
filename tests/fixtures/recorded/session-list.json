@@ -1,0 +1,86 @@
+{
+  "items": [
+    {
+      "sessionId": "session-id-RECORDED-0008",
+      "updatedAt": 1791467400865,
+      "agentAvailable": true,
+      "running": false,
+      "blank": true,
+      "cwd": "RECORDED_WORKSPACE",
+      "projections": {
+        "kind": "sequenced",
+        "asOfSeq": 2,
+        "values": {
+          "title": null,
+          "goal": null,
+          "tokenUsage": {
+            "uncachedInputTokens": 0,
+            "outputTokens": 0,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0
+          },
+          "contextPressure": {},
+          "contextBreakdown": {
+            "systemTokens": 0,
+            "toolsTokens": 0,
+            "messageTokens": 0
+          },
+          "inbox": {
+            "next-turn": [],
+            "next-step": []
+          },
+          "sessionStats": {
+            "turns": 0,
+            "steps": 0,
+            "llmMs": 0,
+            "toolMs": 0,
+            "ttftMs": 0,
+            "ttftSteps": 0,
+            "decodeMs": 0,
+            "decodeTokens": 0
+          },
+          "turnOutline": [],
+          "agentPreset": "standard",
+          "userQuestions": {
+            "active": [],
+            "settled": []
+          },
+          "subagentCatalog": [],
+          "subagentTiming": {
+            "settledMs": 0
+          },
+          "subagent": null,
+          "permissions": {
+            "currentValue": "workspace-write"
+          },
+          "todos": null,
+          "plan": {
+            "active": false,
+            "pending": false
+          },
+          "modelSelection": {
+            "lastUsed": null,
+            "next": null
+          },
+          "sessionListMetadata": {
+            "blank": true,
+            "lastPromptAt": null
+          },
+          "imageLimits": {
+            "maxImageBytes": 20971520,
+            "maxImagesPerMessage": 20,
+            "maxMessageImageBytes": 209715200,
+            "maxImagePixels": 64000000,
+            "maxImageDimension": 8192,
+            "mediaTypes": [
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/gif"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

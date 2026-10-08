@@ -1,0 +1,147 @@
+# Changelog
+
+本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 结构，版本号遵循语义化版本。
+
+> 说明：本文件记录**外部可感知**的变更（安装方式、MCP 工具行为、返回字段、运行状态语义、DSH 版本线）。
+> 内部重构不记录，除非影响上述任一项。
+
+## [Unreleased]
+
+### 状态：**独立验收通过（GO）**，发布与否取决于分发身份决策
+
+解包与安装路径的阻断项已在 P1 解决，运行期行为缺陷已在 P5 修完，独立验收阻断项已在 P8 修完：
+
+- ~~测试套件存在失败用例~~ → 已修复（当前 **455 passed | 1 skipped (456)，0 条 `it.fails`**：那 2 条 expected fail 已转正为真断言）；
+- ~~元数据钉了 registry 上不存在的 `0.4.0`~~ → 已消除（P1：不再有自引用钉，插件自包含）；
+- ~~市场安装静默降级到 0.3.1~~ → 已消除（P1：插件载荷由生成器独占产出，门禁校验）；
+- ~~首次启动预算被 npx 下载污染~~ → 已修复（P3：安装与启动分离；ADR-0002）；
+- ~~`turn/end` 的 `blocked`/`max-tokens` 被判成功、cookie 失效后运行悬挂~~ → 已修复（P5：ADR-0003 状态机 + 失败分类驱动恢复）；
+- ~~`npm run check:live` 会"跑 0 条用例却绿"~~ → 已修复（前置闸门 `scripts/check-live-guard.mjs`：未设 `DSH_LIVE=1` 时 **exit 2** 并打印运行指引）。
+
+**独立验收（round 2）结论：GO**；覆盖 7 条 DoD、两条安装路径（canonical 本地载荷 + `npm pack` tarball 安装后启动）、真实 `DSH_LIVE=1` 链路、泄漏/卫生扫描、文档抽查与 CHANGELOG 完整性。**发布前唯一外部依赖**：npm 分发身份（当前包名归上游，见 ADR-0001 的未决点）；从 registry 安装这一路径因此仍属未验证。
+
+> **R1 整改轮（评审后硬化）**：P0 组（孤儿回收 + 端口自愈、POSIX 进程树、`package-spec` 边界缺陷、版本目录 prune、`DSH_HOME` 安全断言）已落地，**动了 GO 验收的红线范围**（`supervisor`/`launch`/`process-tree`/`runtime-package`/`policy`），因此按同一判据**重新验收**；计划与专家裁定见 `reports/plan-p0-p1.md`，逐项证据见对应报告。
+>
+> **重新验收结论：GO（第二轮）**（`reports/verify-r1-p0.md`）。第一轮由独立验证者判 **NO-GO**，唯一阻断项是**确定性 CI 红**（见下方 Fixed 的 N-1）：本地 Windows 全绿正好掩盖了平台分支，而全仓**无平台型 `skipIf`/`runIf`**，因此 ubuntu 列会真执行那些用例——这是它致命而非被隐藏的原因。修法**不是弱修**：win32 与 POSIX 两侧**硬编码相反期望**并各自显式注入 `platform`，另加"覆盖 `process.platform` 后不注入地重跑三平台"的用例组。复验：`check` exit 0、`455 passed | 1 skipped (456)`、模拟 linux 下 `launch.test.ts` 全文件绿（40 用例）。
+>
+> **仍未验证（不随 GO 消失）**：真实 ubuntu runner 上的 `check.yml` 三列（模拟只覆盖 `process.platform` 条件维度，其边界已实测：不改变 `node:path` 语义、不模拟大小写敏感文件系统、不模拟平台工具可用性 / CRLF / 真信号）；`tests/unit/data-location.test.ts` 在真实 ubuntu 上是否仍绿；`browser.ts` 的三平台 opener 分支（无测试、无注入缝——新发现的信息级残留面）；真实 POSIX 进程回收行为；真实 API key 成功路径；生产数据目录上的 prune 回收量；macOS/Linux 全链路；现场孤儿成因未被独立复现（回收分支是用手工起的真 DSH 验证的）。
+
+系统化改造的进度以 `docs/roadmap.md` 为准；架构约束见 `docs/architecture.md`。
+
+### Fixed（N-1/N-2：平台分支门禁与孤儿文案，独立验证者复验项）
+
+- **N-1（确定性 CI 阻断）**：`tests/service/launch.test.ts` 断言 `detached === false` 时**没有注入 `platform`**，于是读到 `process.platform`——`launch.ts` 的 `detached: platform !== "win32"` 在 ubuntu 上返回 `true`，而 `check.yml` 的矩阵含两个 `ubuntu-latest`，该列**必然红**（Windows 本地全绿掩盖了它）。现在：原有两条用例**显式 `platform: "win32"`**；新增 POSIX 用例（`linux`/`darwin` → `detached === true`，把 P0-2 的进程组前提钉进门禁）；并新增"**不管宿主是什么平台**都跑两个分支"的模拟用例（在测试内覆盖 `process.platform` 后再构建 launch 向量），使该文件在 Windows 与 ubuntu 上都确定性全绿。
+- **N-2（文案与事实不符）**：`orphanProblem` 原先只要存在存活条目就写"N process(es) still hold a port"，而 `port` 可能为 `null`（子在绑定端口前被杀）。现在：`port` 全部未知时写"still running, port unknown"；部分未知时写"still holding port(s) <已知端口> (port unknown for N of them)"，pid 仅在已知时列出。
+- **N-3（不做，按 Lead 裁定）**：`ServiceSnapshot` 不新增 `orphan` 字段——`doctor.orphans` 已提供该可观察面，扩快照属外部契约变更且收益不足。
+
+### Fixed（P0 进程生命周期：孤儿回收与端口自愈、POSIX 进程树、DSH_HOME 安全断言）
+
+- **P0-1 孤儿服务进程与端口自愈**：MCP host 被强杀/客户端崩溃时，单层的 `node …/lib/bin.js` 子进程会**带着监听端口**存活，此前没有任何跨进程对账（现场事故：26 个各带端口的孤立 DSH 服务进程）。现在：
+  - spawn 成功后原子写 `<服务目录>/dsh.pid`（`.tmp` + rename；含 `pid/port/version/binPath/startedAt/dataDirectory/workspace/serviceHome`；端口未知时先写 `null`，就绪后再原子重写真实端口），确认停止后删除、未确认则保留为证据；
+  - `start_service` **启动前对账**：pidfile 存在时先判存活、再判身份；**损坏的 pidfile 只会被丢弃，绝不按其中数字杀进程**；
+  - **安全规则 fail-closed**：只有 OS 报出的命令行**同时**包含我们记录的 `binPath` 与 `--port` 参数才认定"是我们的进程"并回收；**拿不到身份（或身份不符）绝不杀**，上报 `unverified`（PID 复用会误杀用户进程）；
+  - `terminate()` 增加**端口已释放**校验：进程退出但端口仍被占用时再收一次进程树，仍不成功就保持 `stopUnconfirmed: true`（不谎报）；
+  - `doctor` 新增 `orphans` 字段（`state: alive | unverified | stale-pidfile`），并把"存在孤儿"作为**提示性** `problems` 输出——`ready` 仍是四项制，语义不变。
+- **P0-2 POSIX 进程树修补**：POSIX 上子进程改为 `detached: true`（**不 `unref()`**，stdout/stderr 管道保留），使 `kill(-pid)` 真正可用；进程组不可用时走新增的**自叶向根递归保底路径**（Linux 读 `/proc/<pid>/task/<pid>/children`，其它 POSIX 用 `pgrep -P`），最后再杀已记录的 pid。`process-tree.ts` 由**零测试**变为 15 例缝级单测（win32 `taskkill /T /F`、POSIX 有/无进程组、无 pid、killer 启动失败、`hasExited`/`waitForExit` 竞态、身份与存活探针）；Windows 保持 `detached: false`。
+- **P0-5 `serviceHome` / `DSH_HOME` 安全断言（fail-closed）**：创建目录/启动之前校验解析后的数据目录与 `DSH_HOME`——必须绝对路径、不得是文件系统根、不得等于用户主目录或其直接父级、`DSH_HOME` 必须严格位于数据目录之下；违反时抛可操作错误且**不创建任何目录**（真实事故：`DSH_HOME` 被误指到 `C:\Users\<user>`，主目录当场生出 `profiles/`、`storages/`、`.credentials.yaml`）。校验位于 `supervisor.ts`（唯一知道数据目录的层，覆盖注入的 spawn 缝），`launch.ts` 保持叶子模块。
+
+### Changed（P0-4：运行时版本目录清理，fail-closed）
+
+- **自动回收不再使用的 DSH 版本目录**：每个版本约 486 MB，此前只有 `doctor` 报告占用、没有任何清理动作（现场数据目录已到 948 MB 量级）。现在**安装成功后**（仍持有 `<dataDir>/versions/.install.lock` 时）会运行一次 prune：删除「非当前 pin + 未被在用服务引用 + 目录内是完整安装」的 `versions/<版本>/`，以及**超过 24 小时**的 `versions/.tmp-*` 残留。
+- **fail-closed，绝不误删**：拿不到 `.install.lock`（不是本进程持有）→ 整个 prune 跳过、零改动；`services/` 不可读、pidfile 损坏、pidfile 描述的不是本数据目录/本 binPath → 该轮**一个版本目录都不删**；当前 pin 永不删除；名字不是精确版本的目录永不删除；无法确认完整安装的目录永不删除。「在用」判定用既有的 `services/<key>/dsh.pid`（P0-1 写入，含 `version`/`binPath`）：记录的进程存活即视为在用，**存活但身份无法证实**（PID 复用、查不到命令行）同样视为在用。Windows 上 `EBUSY`/`EPERM` 记入 `skipped` 而**不重试、不抛错**，不影响已成功的安装。
+- **可观察**：prune 结果通过 `ensureRuntimePackage` 的返回值新字段 `prune {ran, reason, removed, skipped, reclaimedBytes}` 暴露，并在既有安装日志通道输出一行摘要（例如 `[runtime-package] prune: reclaimed 486.1 MB (1 version directory, 0 staging); skipped 1 (current-pin x1)`）。**未新增 MCP 工具，`doctor` 行为与字段完全未变**（仍是零副作用）。
+- **开关**：`DSH_MCP_PRUNE_VERSIONS`（默认启用；`off`/`0`/`false`/`no`/`disabled` 关闭）。
+- **⚠️ 行为变更（回滚成本）**：切换 `DSH_MCP_HARNESS_PACKAGE` 到新版本后，旧版本目录会被自动回收——原先"旧目录保留即可回滚"的便利需要主动保留（`DSH_MCP_PRUNE_VERSIONS=off`，或把目录复制到别处）。`docs/configuration.md`/`docs/operations.md`/`docs/roadmap.md`/`ADR-0002` 已同步为当前行为。
+
+### Fixed（P0-3：Node 区间判定不再静默放行被排除的版本）
+
+- **`parseExactPackageSpec` 的同源缺陷修复**：`satisfiesNodeRange` 的版本解析原先只做**前缀**匹配，导致三类静默误判——复合子句丢上界（`satisfiesNodeRange("2.5.0", ">=2.3.0 <2.5.0")` 曾返回 `true`）、连字符范围被当作下界（`"1.2.3 - 1.3.0"` 曾与 `1.2.3` 判等）、带后缀/超长版本被当作数字核心（`1.2.3-junk`、`1.2.3.4` 曾判为支持）。现在：解析**锚定**为恰好 `major.minor.patch`；子句按空白拆成多个比较器并**全部成立**才算通过；未实现的语法（连字符范围、`v`/`=` 前缀、带后缀版本）一律返回 `false`（fail-closed）而不是近似。
+- **影响**：当前 pin（`^22.19.0 || >=24.0.0`）不含复合子句，故**无实害**；但把区间改成自然写法（如 `>=22.19.0 <23.0.0 || >=24.0.0`）此前会静默放行不支持的 Node。`package-spec.ts` 由 2 条形状的隐式覆盖变为 **84 例**显式覆盖，并新增"声明区间若使用未覆盖的比较器形式就直接失败"的守卫（`tests/unit/package-spec.test.ts`）。
+
+### Fixed（P8：修复独立验收阻断项 B1–B3）
+
+- **B1（真实缺陷）隔离守卫把"被配置的数据目录"当成用户真实 home**：`tests/support/isolation.ts` 原先对 `DSH_MCP_DATA_DIR`/`PLUGIN_DATA` 与默认目录使用同一条规则（存在性任何变化都失败），而配置目录按设计就是首跑要创建的——于是 `DSH_LIVE=1 DSH_MCP_DATA_DIR=<新目录> npm run check:live` **首次必然 exit 1**（`Test results: 1 failed`，`… was created during the test run`），第二次才通过。现改为**带策略的观察**：默认目录（`~/.deep-seek-harness-mcp`）仍"任何变化都失败"（D-07 保护不退化）；**被配置的目录允许出现、不允许消失**；两者同路径（含 Windows 大小写/相对写法归一）时取更严规则。新增纯函数 `dataDirectoryViolations()` 与 `watchedDataDirectories()`，四条策略回归测试（+7 条用例）全部用合成观察 + 桩探针断言，**不会真的创建** `~/.deep-seek-harness-mcp`。CI 同根因（`.github/workflows/live-smoke.yml` 使用不存在的 `<ws>\.verify-scratch\live-data`）随之解除，workflow 未改。
+- **B2（文档事实性）`allowedWorkspaceRoots` 的取值**：README 中英原称"`null` 表示不限制"，实测恒为 `[]`。改为按实现描述（**未配置时为 `[]`**，空数组即"不限制"）。同时把**取值语义**纳入门禁：测试除 key 集合外，还断言 `allowedWorkspaceRoots` 是数组且未配置为 `[]`、配置后为切分出的根路径数组，`ready === (problems.length === 0)`、`dataDirectory.writable ∈ {yes,no,unknown}`，并断言 README 不再出现 `null` 表示不限制的措辞。
+- **B3（文档事实性）启动耗时分三种情形**：README 中英原称"冷态约 4 秒"，与实测矛盾（真冷启实测 22742 ms，独立验收 29366 ms；仅 DSH 家目录已预热时为 3812 ms）。改为区分**首次安装**（约 1 分钟 / 486 MB，实测 54 s / 486.1 MB）、**真冷启（DSH 家目录为空）约 20–30 秒**、**预热后约 4 秒**，并加测试防止回退到旧说法。
+
+### Changed（P7：工具面单表驱动与文档一致性门禁）
+
+- **注解由行为类派生**：`ToolSpec` 不再各自声明 `annotations`，改为声明语义类 `behavior`（`read-only` / `idempotent-write` / `mutating-write` / `destructive-idempotent`），三个 hint 由 `annotationsFor(behavior)` 计算，`register.ts` 只做装配。`noArgs` 字段删除，改为从入参 schema 派生的 `toolAcceptsNoArgs()` / `NO_ARGUMENT_TOOLS`（同一事实不再写两处）。新增 `result` 字段声明返回语义，并由测试断言处理函数真的返回该形状。
+- **失败出口统一**：`toolFailure()` 成为唯一失败构造器（`isError: true` + 单条可读文本 + 统一脱敏），`register.ts` 直接使用它；工具不再各自拼装错误结果。
+- **`wait_run` 契约写明并测试**：可重复调用、无副作用、已结束的运行反复调用返回同一终态快照、超时返回当前快照而不是失败（工具描述与 README 中英同步）。
+- **新增文档↔工具面门禁**：`scripts/check-metadata.mjs --self-contained` 现在会把真拉起的插件所广告的工具名与 `README.md`/`README.en.md` 的工具表逐一比对，缺一个或多一个都会以 `tool-surface-drift` 失败（`check` 与 `prepack` 链均已覆盖，无需新增 npm script）。
+- **`doctor` 字段↔README 对齐**：README 补齐 `nodeVersion`/`nodeSupported`/`platform`/`architecture`/`apiKeyInEnvironment`/`allowedWorkspaceRoots`/`surface` 七项，并新增测试断言 `doctor` 的顶层键集合与中英 README 的字段表完全一致（`docs/operations.md` §4 的同一清单见 `reports/impl-tool-surface.md`，由 Lead 收编）。
+
+### Security（P6：出口全脱敏、回环校验、契约 fail-closed）
+
+- **凭据只有一个有意出口**：新增凭据值对象 `LaunchCredentials`（`src/service/credentials.ts`）——构造时把 token/cookie 登记进 `src/util/redaction.ts` 的秘密表，`toString()`/`toJSON()`/模板插值默认返回**脱敏形态**，真实值只能经 `loginUrl`/`cookieHeader` 两个显式访问器取得；所有错误文本经 `redactErrorText` 单一入口脱敏（修掉 `browserError` 直写未脱敏错误的旧缺陷），工具结果在 MCP 边界（`tools/register.ts`）再用 `redactDeep` 扫一遍。新增全出口扫描测试 `tests/security-exits.test.ts`（正常/401/浏览器失败/启动失败/工具错误五类场景）。唯一允许携带 token 的字段是返回给调用方的登录 URL（`webUrl`/`loginUrl`），该例外在代码里显式声明为 `LOGIN_URL_KEYS`。
+- **cookie 解析改用 `Headers#getSetCookie()`**：优先数组 API（带逗号的 `Expires=` 不再可能被误切），仅在运行时缺少该方法时回退单头读取；且 `parseSetCookie` 现在拒绝无名 cookie（`"=; Path=/"`、`"HttpOnly"`），避免把垃圾当 cookie 发出去。
+- **只与回环通信**：交换凭据前校验启动 URL 是回环（`127.0.0.0/8`、`::1`、`localhost`），否则以 `protocol-drift` 拒绝且**不发任何请求**；回环请求不传任何 `dispatcher`，因此不受 `HTTP(S)_PROXY` 影响（有"死代理仍成功"的测试）。
+- **契约收紧（ADR-0004）**：`session/list#cwd` 由可选改为**必填**，`session/page` 的 `turn/end`/`assistant/message` 事件按我们实际读取的结构显式类型化（其余事件类型保持 `data: unknown`）；额外字段一律允许，缺失或类型不符即协议漂移。⚠️ **行为变更**：`cwd` 缺失的会话不再可复用（旧版本会放行复用），现在会以 `protocol-drift` 失败并给出字段路径。
+- **归属 fail-closed**：无法证明会话属于本工作区（Host 未报告 `cwd` 或与工作区不一致）时拒绝复用并给出可操作提示（省略 `sessionId` 新建会话）。
+- **安全不变量测试**：新增 `tests/security-invariants.test.ts`，把"声明即事实"钉成可执行断言——`src/**` 无 `shell: true`、启动路径无 `npx`、无任何代理 dispatcher、凭据模块无 IO/无 console、cookie 两条路径、契约取舍、归属 fail-closed。README 安全段同步改写为中英双语的可验证表述。
+
+### Changed（P5：生命周期状态机与错误恢复，ADR-0003）
+
+- **运行终态唯一**：`RunSnapshot.status` 只有 `running`/`succeeded`/`failed`/`cancelled`，并新增 `reason` 字段（仅在 `failed` 时非空）说明失败类别。终态只由 `settle()`（settle-once）写入：重复 settle 返回 `false` 且不覆盖，取消/停止/淘汰路径不会被竞态打断——不再存在"永久 `running` 只留一条 error"或"静默判成功"。
+- **回合映射穷举官方 `TurnEndReasonMap`**：`completed` 是唯一成功；`blocked`→`failed(turn-blocked)`、`max-tokens`→`failed(turn-truncated)`（旧版本把两者误报为成功）；`aborted`+`user` 与用户取消 → `cancelled`，`aborted`+`parent/hook/disposed/legacy` → `failed(turn-aborted:<cause>)`；`interrupted`→`failed(turn-interrupted)`；任何未识别的原因 → `failed(turn-unknown:<kind>)`（fail-closed）。会话停止 running 却没发出终态回合 → `failed(turn-unknown:missing-turn-end)`。
+- **失败分类单一来源**：`dsh/wire.ts` 是唯一的分类实现（HTTP 401/403→`auth-expired`、404→`not-found`、其余→`transport`；信封/响应 schema 漂移→`protocol-drift` 并带方法名与 JSON 路径；业务错误→`rpc:<code>`），`DshRpcError` 携带 `kind`/`method`/`rpcCode`。`run/state.ts` 只按类别决定策略：`auth` 重换凭据后重试一次、`transport` 退避重试至多 4 次、`protocol-drift`/`rpc`/未知**不重试**、调用方错误（`ENOENT`/`ENOTDIR`）原样上抛。取消"用错误信息猜类别"的正则路径。
+- **`doctor.dataDirectory` 变为对象**：`{path, source, exists, writable}`，`source` 说明路径由 `DSH_MCP_DATA_DIR`/`PLUGIN_DATA`/默认值哪一层决定；仅目录已存在时才做真实可写探测（建临时文件→删除），目录不存在返回 `unknown` 且**不创建**。
+- **`doctor.ready` 取四项制 + 新增 `problems`**（裁决 D-a）：`ready = engines.supported && npmCli.exists && dataDirectory.writable !== "no" && runtimePackage.error === null`，且**严格等价于 `problems` 为空数组**（`ready` 由 `problems.length === 0` 推导，二者不可能漂移）。`problems: string[]` 每项是一条"未满足的前置条件 + 可照做的修法"，至少覆盖 Node 不在区间、npm CLI 找不到/不是绝对路径、数据目录不可写、运行时包 spec 非法；`ready=false` 因此永远自带解释，`runtimePackage.error` 保留为细节层。非法 spec 重新计为 `ready=false`（此前在这点上是过度乐观的）。
+- **停止/处置语义**：所有分支（含"进程已退出"早退与取消失败）都收敛并结算该服务的运行；无法确认退出时 `ServiceSnapshot.stopUnconfirmed` 为真，运行本身按 `failed(service-unreachable)` 结算。
+- **测试网**：新增 `tests/unit/state.test.ts`、`tests/unit/wire.test.ts`，并把旧的 `tests/{run-manager,runtime,server}.test.ts` 按被测模块拆分为 `tests/{service,run,config,diagnostics,tools}/`；每条新路径至少有一次反向验证（把实现改回旧行为即变红，见 `reports/impl-lifecycle.md`）。
+
+### Changed（P3：启动向量＝数据目录本地安装 + 直接 `node` 启动，ADR-0002）
+
+- **获取与启动分离**：首次使用某个 DSH 版本时，先把精确 pin 的 `@deepseek-ai/dsh@<版本>` 安装到 `<DSH_MCP_DATA_DIR>/versions/<版本>/`（临时目录安装 → 原子改名；`.install.lock` 防并发重复安装；已安装则**一次 npm 都不调用**，可离线复用），随后启动一律为 `process.execPath <已安装包>/lib/bin.js web --no-open --port 0`。
+- **不再需要 shell**：启动向量 `shell: false`，`npx`/`npx.cmd`/`cmd.exe` 从运行路径消失；由此消除 Windows 命令注入面，进程树由 4 层降为 1 层，`child.kill()` 即可收尾（平台收树仅作兜底）。实测稳态就绪由 6.43–7.47 s 降到约 3.5 s。
+- **配置契约变更**：新增 `DSH_MCP_NPM_CLI`（npm CLI 的 js 绝对路径，默认由 `process.execPath` 推导）、`DSH_MCP_INSTALL_TIMEOUT_MS`（默认 `900000`，一次性安装预算）；`DSH_MCP_STARTUP_TIMEOUT_MS` 默认值改为 `180000` 且语义改为**活动重置**（子进程每产生一行输出即重置，只有静默才算超时）；`DSH_MCP_NPX_COMMAND` **移除**（仍设置时 `doctor` 报告"已废弃且被忽略"）。
+- **失败可诊断**：npm 安装失败按 `ETARGET`/`E404`（版本不存在，不重试）、`ENOTCACHED`（缓存/离线，提示预热）、其余（按网络重试一次）分级，错误信息带 npm stderr 尾与可操作提示；启动失败信息带脱敏日志尾 + 运行时包路径 + npm stderr 尾。
+- **停止语义**：所有分支（含"进程已退出"早退）都收敛 `status`/`stoppedAt` 并释放工作区索引；无法确认退出时写 `stopped` 但附 `stopUnconfirmed: true`，不再谎报。
+- **`doctor` 扩展**：新增 `version`、`engines`（本项目自带 `^22.19.0 || >=24.0.0`，因为发布的 DSH 没有 `engines` 字段）、`runtimePackage {spec, installed, version, root, binPath, diskBytes}`、`npmCli`、`dataDirectory`、`proxy {env, noProxy}`、`deprecatedEnv`；`start_service` 快照新增 `stopUnconfirmed` 与 `runtimeRoot`。
+- **⚠️ 行为变更（首跑成本）**：首次使用某版本时需一次性安装约 486 MB 运行时包（暖缓存约 1 分钟）；该成本走独立预算，**不再**计入启动就绪时间。迁移到本版本后首跑会明显变慢一次，之后启动不再触网。
+
+### Changed（P1：分发与版本单一事实来源）
+
+- **安装方式变更**：插件不再通过 `npx --package=deepseek-harness-for-codex@<版本>` 启动，改为**自包含启动** `node ./dist/bin.mjs`（`cwd` = 插件根目录）。因此不再存在"发布前自引用"死锁，也不会再出现"装上了插件却拉到另一版本"的静默降级。
+- **构建产物自包含**：`dist/bin.mjs` 内联全部运行时依赖（约 710 kB，仅保留 `node:` 内置导入），使 Codex 把插件文件复制到自己的缓存目录（无 `node_modules`）后仍能启动。
+- **版本只有一个来源**：`package.json` 为唯一权威；`src/version.ts`、`.mcp.json`、`.codex-plugin/plugin.json` 与市场载荷 `plugins/deepseek-harness/**` 全部由 `npm run version:sync` 生成，并由门禁逐字节校验。
+- **市场载荷不再提交**：`plugins/deepseek-harness/` 加入 `.gitignore`，只在上一步生成（提交生成副本等于制造第二份版本事实，正是 0.3.1/0.4.0 并存事故的成因）。
+- **本地安装步骤变更为**：`npm install && npm run prepare:plugin` 之后再执行 `codex plugin marketplace add <本地绝对路径>`。
+- 已知限制：Codex 按插件版本缓存内容，同版本内容更新需要提升 `package.json` 的 `version`（或清理缓存目录）才会重新复制。
+
+### Added（P1/P2：工程门禁与测试网）
+
+- `npm run prepare:plugin`：构建 + 生成 + 全量 `check`（本地安装插件前必跑）。
+- `npm run version:sync` / `npm run version:check`：生成与校验所有派生的版本元数据。
+- `npm run check-metadata`：版本一致性、`files[]` 白名单、脚本门禁链、marketplace 解析、README 硬编码、`.gitignore`、`dist` 自包含与**运行期启动探针**（真拉 MCP 断言握手与工具目录）；已接入 `check` 与 `prepack`。
+- 测试体系：`tests/contract/`（真实 0.2.1 wire 采集 + 脱敏回放）、夹具保真度对齐官方 wire、`tests/unit/`（运行时包安装幂等/并发/失败分级、就绪预算、进程树）、`tests/e2e/live.test.ts`（需 `DSH_LIVE=1` 的真实 smoke）、`tests/module-boundaries.test.ts`（分层落地后启用的骨架）。
+- **CI 门禁**：`.github/workflows/check.yml`（`windows-latest`/`ubuntu-latest` × Node 22/24 跑 `npm ci && npm run check`）、`.github/workflows/live-smoke.yml`（仅手动触发的真实 DSH smoke）、`.github/pull_request_template.md`（自检清单）。
+- 文档：`docs/architecture.md`、`docs/decisions/ADR-0001..0005`、`docs/roadmap.md`、`docs/plans/phase-4-5-refactor-plan.md`、`docs/configuration.md`（**冻结的配置契约**）、`docs/operations.md`（安装/升级/排障/验收手册）、`CHANGELOG.md`（本文件）。
+
+### Known issues（在本版本中未修复，见路线图）
+
+- 无运行期阻断项。（已随 P5 解决并从本清单移除：`turn/end` 的 `blocked`/`max-tokens` 被误判为成功；cookie 失效后运行可能永久停留在 `running`。详见上方 P5 Changed 段。）
+
+（已随 P3 解决并从本清单移除：首次运行仍走 `npx` 获取 DSH；`DSH_MCP_NPX_COMMAND` 未校验而 Windows 上经 shell 启动；`doctor` 未输出版本字段。详见上方 P3 Changed 段。）
+
+### Changed（0.4.0 协议重写：DSH 版本线与 Web RPC 适配）
+
+- **DSH 版本线**：`DSH_MCP_HARNESS_PACKAGE` 默认值由 `@deepseek-ai/dsh@0.1.0-rc.6` 升级为 `@deepseek-ai/dsh@0.2.1-alpha.1`。
+- **协议适配**：RPC 方法改用当前 DSH 路由（`workspace/create`、`session/create`、`session/projections`、`session/page`、`session/prompt`、`session/cancel`），请求改为命名参数信封 `payload.args`。
+- **会话读取**：移除 `session.history`，改用 `session/projections` 的 `asOfSeq` 游标配合 `session/page` 向前分页读取。
+- **认证**：新增通过 DSH 启动链接换取本机登录 cookie 的流程（`GET <启动URL>` → `303` + `set-cookie`），此后 `/api` 调用携带该 cookie。
+- **浏览器**：启动参数改为 `dsh web --no-open --port 0`，默认不打开浏览器；`openBrowser` 默认 `false`。
+- ~~**Windows 启动**：通过隐藏的 `cmd.exe` 执行 `npx.cmd`，并校验传入的 DSH 包名不含 shell 元字符。~~ → 已由 P3 取代（数据目录本地安装 + 直接 `node <bin.js>`，无 shell）。
+- ~~**Windows 停止**：关闭时按进程树清理（`taskkill /PID <pid> /T /F`），避免 npx 派生进程逃逸。~~ → 已由 P3 取代（常规路径 `child.kill()`，平台收树仅作宽限期后的兜底）。
+- **日志脱敏**：启动日志与 `logTail` 中的 `token=` 参数替换为 `[redacted]`。
+- **版本元数据同步**：`package.json`、`package-lock.json`、`.codex-plugin/plugin.json`、`.mcp.json` 与 MCP 服务元数据版本一致（P1 后由生成器 + 门禁保证）。
+
+> 本版本的未修复项统一见上方「Known issues」清单，不再重复。
+
+## [0.3.1]
+
+当前 npm 上的最新版本（`latest`）。
+
+- 基于 `@deepseek-ai/dsh@0.1.0-rc.6` 的旧协议实现（`workspace.create` / `session.create` / `session.history`），无 cookie 认证流程。
+- 插件市场与内嵌副本均指向 `0.3.1`。
