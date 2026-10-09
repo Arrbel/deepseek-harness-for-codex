@@ -7,24 +7,38 @@
 
 | 事项 | 答复 | 我的执行 |
 |---|---|---|
-| ① 推送与发布 | **先只推 Git，发布留待单独决定** | 推 `main` 与全部 tag 到 `origin`；**不执行 `npm publish`**——**推送被拒，见下** |
+| ① 推送与发布 | **先只推 Git，发布留待单独决定** | **已推送到你的 fork**（见下）；**不执行 `npm publish`** |
 | ② `plugins/**` 是否入库 | **保持现状：不入库** | 零改动（`.gitignore` 不动） |
-| ③ `deepseek-harness-relay-mcp` | **删除以清空工作区** | 删除前核对解析后的绝对路径与内容归属，再删 |
+| ③ `deepseek-harness-relay-mcp` | **删除以清空工作区** | 删除前核对解析后的绝对路径与内容归属，再删（已核对：`main == origin/main`，无本地独有提交） |
 
-### 推送结果：**403，需要你处理凭据**（不是代码问题）
+### 推送结果：**已推到你的 fork**（`Arrbel/deepseek-harness-for-codex`）
+
+**背景澄清（决定了推送该往哪去）**：`Seann0824/deepseek-harness-for-codex` 是**上游开源项目**，本仓是"拉取后完善优化"的工作副本，因此**既不应该、也没有权限**写上游。首次推送报 403 正是这个原因（本机凭据是 `Arrbel`，对上游只有读权限）——那不是缺陷，而是边界正确。
+
+已在用户创建 fork 后完成：
 
 ```
-remote: Permission to Seann0824/deepseek-harness-for-codex.git denied to Arrbel.
-fatal: unable to access 'https://github.com/Seann0824/deepseek-harness-for-codex.git/': The requested URL returned error: 403
+$ git push fork main          # 12174fc..e31f7fb  main -> main（可快进）
+$ git push fork --tags        # v0.4.0 … v0.4.4 全部新建
 ```
 
-`main` 与 tags 两次推送都是同一个原因：本机缓存的凭据属于 **`Arrbel`**，而仓库属于 **`Seann0824`**，所以只有**读**权限。提交与 tag 都在本地（`git log origin/main..HEAD` = 4 个提交，工作树干净），**没有任何东西被推到远端**。可选修法（都需要你的账号动作，我不会自行改动凭据）：
+**远端布局已改为标准 fork 形式**（原 `origin` 改名为 `upstream`，`fork` 改名为 `origin`）：
 
-1. 用仓库属主登录：`gh auth login`（选 `Seann0824`）或把 credential helper 换成该账号的 PAT；
-2. 或把 `Arrbel` 加为仓库 **collaborator**（需要写权限）后重试；
-3. 或在有权限的机器上执行 `git push origin main && git push origin --tags`。
+| 远端 | URL | 用途 |
+|---|---|---|
+| `origin` | `github.com/Arrbel/deepseek-harness-for-codex.git` | **你的 fork**：`main` 跟踪它，日常 `git push` 落这里 |
+| `upstream` | `github.com/Seann0824/deepseek-harness-for-codex.git` | **上游只读**：`git fetch upstream` 用来跟进原项目 |
 
-推送前请自行核对：`git log --oneline origin/main..HEAD`（应为 4 个提交）与 `git tag`（应为 `v0.4.0`…`v0.4.3`）。
+日常操作：
+
+```bash
+git fetch upstream && git merge upstream/main   # 跟进上游（或 rebase）
+git push                                        # 推自己的 fork
+```
+
+**要向上游贡献**：从 `Arrbel:main` 开 PR 到 `Seann0824:main`（上游 `main` 目前停在 `12174fc`，我们领先 5 个提交）。这一步**只由你决定**，我不会自行发起。
+
+**与推送无关、但处于未决状态的一项**：`package.json` 的 `repository`/`homepage`/`bugs` 与两份 README 的 `git clone` 示例目前都指向上游 `Seann0824/...`。作为 fork 维护者是否改成自己的地址，取决于你的分发身份决定（该 npm 包名 `deepseek-harness-for-codex` 目前归属上游作者 `sean_xyb`）。**未擅自改动**，等你定。
 
 > 答复之后，本节以下的"选项/建议"文字保留为**决策依据的历史记录**（解释当时为什么这样问、代价分别是什么），不再表示待决状态。
 
@@ -39,14 +53,14 @@ fatal: unable to access 'https://github.com/Seann0824/deepseek-harness-for-codex
 | `deepseek-harness-for-codex` 这个**非作用域名字已经被占用**，且**就是你自己的包** | `npm view deepseek-harness-for-codex`：`version 0.3.1`、`repository = github.com/Seann0824/deepseek-harness-for-codex`、`maintainers = sean_xyb <sean@englife.space>`、`time.created = 2026-08-13` |
 | 本地 `package.json` 是 `0.4.0`，且 `publishConfig = { access: public, registry: npmjs.org }` | `package.json` |
 | `dependencies` **为空**（SDK 与 zod 已进 `devDependencies`，产物自包含） | `package.json` |
-| 有 **3 个未推送提交**（`16b8029`、`a5bd5a9`、`cf04b8c`），远端 `origin` 是上面那个 GitHub 仓库 | `git log origin/main..HEAD` |
+| 有 **5 个未推送提交**（`16b8029`、`a5bd5a9`、`cf04b8c`、`484e0e5`、`e31f7fb`），远端 `origin` = **你的 fork**（`upstream` = 上游只读） | 本节写作时为 3 个；后续 R4/R5+R6 再各加一个，**现已全部推入 fork**（`git rev-list --count upstream/main..main` = 5） |
 
 ### 选项
 
 | 选项 | 说明 | 代价 / 风险 |
 |---|---|---|
 | **A. 按现状发布 0.4.0 → 0.4.2（推荐，若你想要"可安装"）** | 沿用你已有的非作用域名，`npm publish` 前先 `npm run check` + `npm run sbom`；provenance 由 R4-1 的 workflow 提供（发布动作**不在** workflow 里，仍由你手动执行） | 发布**不可逆**（unpublish 受限）；`0.4.x` 一旦发出，后续任何修正都必须以**新版本**出现 |
-| **B. 只推 Git、不发 npm** | `git push origin main` + `git push --tags`；使用者通过 `git clone` + `npm install` 或 `npm pack` 的 tarball 安装 | 使用者体验多一步；但零 registry 暴露、零不可逆动作 |
+| **B. 只推 Git、不发 npm**（**已按此执行**） | 推到**你的 fork**：`git push origin main` + `git push origin --tags`（`origin` = `Arrbel/deepseek-harness-for-codex`）；使用者通过 `git clone` + `npm install` 或 `npm pack` 的 tarball 安装 | 使用者体验多一步；但零 registry 暴露、零不可逆动作。**注意**：上游 `Seann0824/...` 只读，**不要**尝试推它 |
 | **C. 换作用域名（如 `@sean-xyb/deepseek-harness-for-codex`）** | 面向未来避免名字歧义 | 现有 0.3.x 使用者需要改安装名；收益不明确 |
 
 **我的建议**：先做 **B**（把 3 个提交与 3 个 tag 推上去，零风险），**是否发布 0.4.x 由你单独决定**。理由：发布是唯一不可逆的动作，而"推 Git"随时可再推一次。

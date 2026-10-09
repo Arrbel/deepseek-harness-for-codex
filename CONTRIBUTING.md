@@ -3,6 +3,23 @@
 本项目的第一条纪律是**证据优先**：任何"完成了"都必须能指向原始输出、可复核的断言或代码行。
 本文件只写**接手者最容易踩的坑**；架构约束见 `docs/architecture.md`，验收流程见 `docs/operations.md` §5。
 
+## 0. 远端布局：这是**上游项目的 fork 工作副本**
+
+`Seann0824/deepseek-harness-for-codex` 是**上游开源项目**，本仓是拉取后完善优化的工作副本。远端按标准 fork 形式配置：
+
+| 远端 | 指向 | 用途 |
+|---|---|---|
+| `origin` | `Arrbel/deepseek-harness-for-codex`（**你的 fork**） | `main` 跟踪它；日常 `git push` 落这里 |
+| `upstream` | `Seann0824/deepseek-harness-for-codex`（**上游，只读**） | `git fetch upstream` 跟进原项目 |
+
+```sh
+git fetch upstream && git merge upstream/main   # 跟进上游（或 rebase）
+git push                                        # 推自己的 fork
+```
+
+**不要尝试推 `upstream`**——你对它只有读权限（推它会得到 403，这是权限边界正确，不是配置错误）。要向上游贡献，请从 `Arrbel:main` 开 PR 到 `Seann0824:main`。
+`package.json` 的 `repository`/`homepage`/`bugs` 与两份 README 的 `git clone` 示例**仍指向上游**；改成 fork 地址属于分发身份决定，尚未定案（见 `docs/plans/r4-decisions.md`）。
+
 ## 1. 一个写者一个文件范围
 
 多人/多智能体并行时，按**文件范围**分工，不要两人同时改同一个文件：
