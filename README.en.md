@@ -36,7 +36,7 @@ This repository root *is* the Codex plugin (`.codex-plugin/plugin.json` + `.mcp.
 but `dist/` has to be built first — Codex only copies files and never builds for you. Prepare a local checkout:
 
 ```sh
-git clone https://github.com/Seann0824/deepseek-harness-for-codex.git
+git clone https://github.com/Arrbel/deepseek-harness-for-codex.git
 cd deepseek-harness-for-codex
 npm install
 npm run prepare:plugin
@@ -67,7 +67,8 @@ codex plugin marketplace add <your marketplace repo or package name>
 codex plugin add deepseek-harness@deepseek-harness-for-codex
 ```
 
-**Do not** run `marketplace add Seann0824/deepseek-harness-for-codex --ref main`: the marketplace payload
+**Do not** run `marketplace add Arrbel/deepseek-harness-for-codex --ref main` (nor the upstream
+`Seann0824/deepseek-harness-for-codex`): the marketplace payload
 `plugins/deepseek-harness/` is a build artifact and is not committed, so a fresh clone has nothing to install.
 Distributing over git requires running `npm install && npm run prepare:plugin` inside the clone first (the
 canonical path above), or switching to the "commit the generated payload" distribution shape.

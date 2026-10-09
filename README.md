@@ -36,7 +36,7 @@ DEEPSEEK_API_KEY=your-key
 但 `dist/` 需要先构建 —— Codex 只复制文件，不会替你构建。因此先准备本地副本：
 
 ```sh
-git clone https://github.com/Seann0824/deepseek-harness-for-codex.git
+git clone https://github.com/Arrbel/deepseek-harness-for-codex.git
 cd deepseek-harness-for-codex
 npm install
 npm run prepare:plugin
@@ -67,8 +67,8 @@ codex plugin marketplace add <你方 marketplace 仓库或包名>
 codex plugin add deepseek-harness@deepseek-harness-for-codex
 ```
 
-**不要**直接对 `Seann0824/deepseek-harness-for-codex` 使用 `marketplace add --ref main`：
-该仓库的市场载荷 `plugins/deepseek-harness/` 是构建产物且未提交，克隆出来是空的，
+**不要**直接对 `Arrbel/deepseek-harness-for-codex`（或上游 `Seann0824/deepseek-harness-for-codex`）使用 `marketplace add --ref main`：
+两个仓库的市场载荷 `plugins/deepseek-harness/` 都是构建产物且未提交，克隆出来是空的，
 插件安装会失败。以 git 源分发时需要先在克隆里执行 `npm install && npm run prepare:plugin`
 （即上面的 canonical 路径），或者改用「生成产物一并提交」的分发形态。
 

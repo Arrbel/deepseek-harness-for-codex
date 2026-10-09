@@ -38,7 +38,14 @@ git push                                        # 推自己的 fork
 
 **要向上游贡献**：从 `Arrbel:main` 开 PR 到 `Seann0824:main`（上游 `main` 目前停在 `12174fc`，我们领先 5 个提交）。这一步**只由你决定**，我不会自行发起。
 
-**与推送无关、但处于未决状态的一项**：`package.json` 的 `repository`/`homepage`/`bugs` 与两份 README 的 `git clone` 示例目前都指向上游 `Seann0824/...`。作为 fork 维护者是否改成自己的地址，取决于你的分发身份决定（该 npm 包名 `deepseek-harness-for-codex` 目前归属上游作者 `sean_xyb`）。**未擅自改动**，等你定。
+**分发身份元数据：已按用户决定改为自己的 fork**。原先指向上游的四处已全部改为 `Arrbel/deepseek-harness-for-codex`：
+- `package.json` 的 `repository.url` / `homepage` / `bugs.url`；
+- `README.md` 与 `README.en.md` 的 `git clone` 示例；
+- 两份 README 里"不要对 `--ref main` 使用 marketplace add"的警告（**两个仓库都适用**：fork 与上游都把 `plugins/` 排除在版本库外，所以 git 源安装都会拿到空载荷——警告的主语改成了你的 fork，并保留上游名字作为说明）。
+
+**未改动、也不应改动的**：`LICENSE` 的版权声明（MIT 要求保留上游版权与许可原文）；`.agents/plugins/marketplace.json` 用的是**相对本地路径**（`./plugins/deepseek-harness`），与远端地址无关。
+
+**仍然未决（与上面这处不同，需要单独决定）**：npm 上的包名 `deepseek-harness-for-codex` 目前归属**上游作者**（`sean_xyb`，0.3.1），因此"用同一个名字发布"会撞车；要发布就得换名字或与上游协调（选项见下方 §「选项」）。
 
 > 答复之后，本节以下的"选项/建议"文字保留为**决策依据的历史记录**（解释当时为什么这样问、代价分别是什么），不再表示待决状态。
 

@@ -19,11 +19,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Seann0824/deepseek-harness-for-codex.git"
+    "url": "git+https://github.com/Arrbel/deepseek-harness-for-codex.git"
   },
-  "homepage": "https://github.com/Seann0824/deepseek-harness-for-codex#readme",
+  "homepage": "https://github.com/Arrbel/deepseek-harness-for-codex#readme",
   "bugs": {
-    "url": "https://github.com/Seann0824/deepseek-harness-for-codex/issues"
+    "url": "https://github.com/Arrbel/deepseek-harness-for-codex/issues"
   },
   "publishConfig": {
     "access": "public",
