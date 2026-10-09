@@ -205,7 +205,9 @@ export function parseJournal(text: string): JournalRecord | null {
     startEventSeq: raw["startEventSeq"],
     sawRunningSession: raw["sawRunningSession"],
     cancelRequested: raw["cancelRequested"],
-    error: error as string | null,
+    // Legacy-read cleaning (R5-4), the same rule `webUrl` gets above: a record written before this
+    // field was scrubbed may still hold a credential, and a reader must not hand it out either.
+    error: error === null ? null : redactSecrets(error),
   };
 }
 
@@ -291,9 +293,15 @@ export class RunJournal {
       return false;
     }
     const target = this.pathFor(record.runId);
-    // Last line of defence for the credential rule (R3-3b): whichever caller built this record,
-    // a terminal one never carries the launch token to disk.
-    const safe: JournalRecord = { ...record, webUrl: journalWebUrl(record.webUrl, record.status) };
+    // Last line of defence for the credential rule (R3-3b + R5-4): whichever caller built this
+    // record, a terminal one never carries the launch token to disk, and the free-text `error`
+    // field is scrubbed exactly like every other outward string. `dsh/drift.ts` redacts field by
+    // field; the journal must not be the one writer that skips it.
+    const safe: JournalRecord = {
+      ...record,
+      webUrl: journalWebUrl(record.webUrl, record.status),
+      error: record.error === null ? null : redactSecrets(record.error),
+    };
     // Per-process temporary name: two processes writing different records never collide on it.
     const temporary = `${target}.${String(process.pid)}${JOURNAL_TMP_SUFFIX}`;
     try {

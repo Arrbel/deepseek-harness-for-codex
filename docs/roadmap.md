@@ -75,15 +75,27 @@
 
 来源：`reports/verify-r4-adversarial.md`（proto-verify 的**打假**报告）。总判定**无阻断项**，以下四项按发现顺序登记，**每条都带可执行的修法**：
 
-| 项 | 主题 | 严重度 | 出口判据 |
+| 项 | 主题 | 严重度 | 状态与证据 |
 |---|---|---|---|
-| R5-1 | **P0-5 的别名层缺口**：数据目录护栏只比较拼写、**不解析 realpath**，而工作区护栏**会**解析（`workspace.ts` / `orchestrator.ts` 用 realpath，`paths.ts` 明说不用）——已实测：指向 home 的 junction 能骗过护栏并**真的写进 home** | 中（设计缺口，非回归；能设该变量者本就能直接写 home） | 护栏在**路径存在时**额外比较 `realpath`（不存在时取**最近存在祖先**的 realpath），与 home/父目录/根比较沿用**保护性折叠**；用例含真实 junction/symlink 实验（临时目录内建、结束删净）；**两条护栏的 realpath 语义必须一致**（否则又是"两套规则"） |
-| R5-2 | **`npm ci` 的生命周期钩子面**：release/check/live-smoke 三处都是裸 `npm ci`，而 `npm ci` **会执行** root `preinstall/install/postinstall/prepare`；元数据门禁只要求指定脚本存在、**不禁新增**这些钩子 | 中 | 要么在 CI 里用 `--ignore-scripts` 并显式列出需要的脚本，要么**把"不得新增生命周期钩子"纳入门禁**（两者择一，需论证）；无论选哪条，报告里要写清"一个发布步骤还能从哪进来" |
-| R5-3 | **"绝不 publish"检测器的盲点**：`findPublishActions` 漏 `npm --prefix . publish`、`npm run <script>`、`node scripts/publish.mjs`、直连 registry 的 HTTP；且**不扫描** `package.json#scripts`、`.npmrc`、`scripts/**`；其 docstring 声称"任何步骤里夹带的发布都会在此失败"**强于代码能力** | 中 | 要么扩大检测面（含 `package.json#scripts`/`.npmrc`/`scripts/**` 与 `--prefix` 形态），要么**把 docstring 降到与能力相符**——**两者都必须做其中之一**，不允许"声称强于实现" |
-| R5-4 | **`journal.error` 未走 `redactSecrets`**，与 `drift.ts` 的逐字段脱敏纪律不一致 | 低 | 统一走脱敏；用例：把 token 形状塞进 error → 断言文件里不出现 |
-| R5-5 | **结构性批评（前瞻）**：折叠策略"按调用点选用"，而默认值是最宽的 `filesystem` → 将来破坏性调用点**忘传** `"win32-only"` 会静默扩大杀/删面，无结构性拦截 | 低 | 二选一：**取消默认值**（强制每个调用点显式声明意图）或**把默认值改成"act-less"**；无论哪种都要留下"新增调用点会被强制表态"的证据 |
+| R5-1 | **P0-5 的别名层缺口**：数据目录护栏只比较拼写、**不解析 realpath**，而工作区护栏**会**解析——已实测：指向 home 的 junction 能骗过护栏并**真的写进 home** | 中（设计缺口，非回归） | ✅ **已修**（launch-impl，红线）：新增生产入口 `dataLocationAliasProblems`（拼写层保持不变 + **磁盘身份层**）：存在时比较 `realpath`、不存在时回退**最近存在祖先**、解析失败（ELOOP/EACCES/未知 errno）**fail-closed**；`supervisor.ts` 生产接线有结构性用例钉住。**双重独立确认**：终验与对抗复攻都用**真实 junction** 打原攻击 → **被拒且 home 零写入**，并有**正对照**证明"被拒来自护栏而非探针跑不起来"；19 条穷举（含嵌套/相对/不存在子目录/ELOOP 环/UNC）全部被拒或 fail-closed。文档：`docs/configuration.md` §2 + 两份 README（N-R5-2 已补） |
+| R5-2 | **`npm ci` 的生命周期钩子面**：`npm ci` **会执行** root `preinstall/install/postinstall/prepare`，而元数据门禁只要求指定脚本存在、**不禁新增** | 中 | ✅ **已修**：三处 workflow 共 4 个 `npm ci` 全部 `--ignore-scripts`（**等价性用忠实 CI 模拟证明**：`npm run check` exit 0、857 passed）；新增**结构性门禁**（四个 CI 钩子必须不存在；`prepack`/`prepublishOnly` 锁定为审查值，带原因 allowlist）。反向验证：加 `postinstall` → `[lifecycle-hook] … must not exist` 红 → 还原哈希一致。边界如实记录（`scripts/**` 语义级不做 → R6-3） |
+| R5-3 | **"绝不 publish"检测器的盲点 + docstring 强于实现** | 中 | ✅ **已修**：检测面扩到 `--prefix`/`--global`/`--filter`/`--cwd`/`=` 等形态 + 扫描 `package.json#scripts`/`.npmrc`/`scripts/**`；R4 复核打出的 **4 个漏检形状全部被捕获**（含 `npm --prefix . publish`）；文件头改为"能看见什么 / **诚实地看不见**什么"两节。对抗复攻独立重放 15/19 形状被抓，剩余 3 个正是自认盲点 ⇒ **声明不再超出能力**。（残余漏检 `["npm","publish"]`/`$NPM_CLI publish` 与注记同形问题 → R6-5） |
+| R5-4 | **`journal.error` 未走 `redactSecrets`**，与 `drift.ts` 逐字段纪律不一致 | 低 | ✅ **已修**：写入与读回两处统一脱敏；终验**读磁盘字节**复核，并如实记录边界（`Bearer`/base64url 靠注册表层、未注册串不擦；`task` 等自由文本仍明文 → R6-2） |
+| R5-5 | **结构性批评**：折叠策略"按调用点选用"而默认值最宽 → 破坏性调用点**忘传** `"win32-only"` 会静默扩大杀/删面 | 低 | ✅ **已修**：`platform`/`policy` 默认值**全部取消**，漏参即 `TS2554: Expected 3 arguments, but got 2`；6 行调用点分类为 3 保护性 + 2 动作型。**强度边界如实**：`@ts-expect-error`/断言等 4 条绕过路线可编译，但运行期 **fail-loud**（`TypeError`），不会静默放宽 |
 
 > **R5 的纪律**：R5-1 与 R5-5 都动**红线文件**（P0-5 语义 / 调用约定），因此 R5 必须**重新做一轮独立验证**（含真实 junction/symlink 绕过尝试），不得沿用 R4 的验收结论。
+
+### Wave R6（下一轮：先量化再动手，不猜）
+
+| 项 | 主题 | 为什么现在登记 | 出口判据 |
+|---|---|---|---|
+| R6-1 | **全量测试的时序假设（已定量并已修）**：`orchestrator.test.ts:102` `expected 'succeeded' to be 'running'`——全量连跑 **8 次 → 6 红（75%）**，同文件单独跑 **8/8 绿** | **CI 约 3/4 概率红且与改动无关**，门禁因此不可信；判定为**测试时序假设**（`succeeded` 正是该测试自己随后断言的正确终态；负载敏感；其它 21+ 条同路径用例从不抖） | ✅ **已修**（task-42）：fake Host 的回合**可被测试显式放行**（`FIXTURE_TURN_HOLD=1` + `POST /__fixture/release`），"活着"成了 Host 的**状态**而非"还没到时间"；**改后 15 次全量连跑 line102 命中 0/15**（含 8/8 一轮逐次贴出）+ **3 条反向验证**（改回时序 / 忽略持有 / 移除路由 → 全红后逐字节还原）+ 该用例**净增 5 条断言**、其余 21 条零削弱。**`src/**` 未动**。**副产品纪律**：并发有人写 `src/**` 时，别人的全量跑可能出**瞬时红**（`[PARSE_ERROR]` 加载阶段集体失败）——先核对文件 mtime 再下结论，它**不是**门禁可信度问题 |
+| R6-2 | **脱敏的表层边界**：`?token=` 走**模式层**，而 `Bearer`/base64url 走**注册表层** ⇒ 未注册的 bearer 串不会被擦；且 journal 目前只脱敏 `error`/`webUrl`，**`task` 等自由文本仍以明文落盘**（`reports/verify-r5.md` N-R5-3 实测） | 与既有边界一致（非回归），但"脱敏靠注册"这件事在多条新路径（journal / drift / 投影）出现后值得重新审视；`task` 明文是**用户自己输入的任务文本**，风险低但不能算"已脱敏" | 明确"哪些串**必然**被擦（注册 + 模式）""哪些**不会**"；决定 `task` 是否纳入脱敏并给出误伤评估（不能把正常文本擦成乱码） |
+| R6-3 | **"发布面"边界的完整性**（R5-2/R5-3 的后续） | 用"禁新增生命周期钩子"堵住 `prepare`/`postinstall` 之后，还要回答"发布还能从哪进来"（`scripts/**` 间接调用、动态 `require`、网络出口） | 与 R5-3 的检测面清单合并成一份**可核对的边界文档**，而不是散在测试注释里 |
+| R6-4 | **`paths.ts` 的一个 fail-open 判定**（对抗复攻发现，低）：解析结果 `{ok:false, code:null}`（**没有 errno 名**）被当作"路径不存在"→ ACCEPT | 当前 resolver 不会这样抛错 ⇒ **不可达**，但"无 errno 视作不存在"是一条会随实现变化而变危险的默认 | 一行改：`code === null` 时按 **fail-closed** 处理（拒绝），并补一条注入式用例钉住 |
+| R6-5 | **检测器的语义噪声与残余漏检**（低，纵深项）：① `.npmrc:1` 的 `registry=` **端点注记**与**真命中**在 `findings` 里同形（只靠 `kind` 区分，审阅者会误判为"已捕获"）；② 仍漏 `["npm","publish"]`（数组形态）与 `$NPM_CLI publish`（变量拼接） | 不是当前可用的发布路径，但"注记"与"发现"混在一个数组里会长期削弱报告可信度；漏检两类形状是**检测面**的诚实边界 | 注记与发现分开返回（或在输出里加显式前缀）；补两类形状用例或把它们写进"看不见什么"清单 |
+| R6-6 | **`doctor` 预检的工作区盲区**（低，R6 轮由实现者如实报告的残留反例）：若 `<dataDir>/services/<workspaceKey>`**本身**是指向他处的链接、而 `<dataDir>/services` 不是，`doctor`（无工作区上下文）报 `ready:true`，而该工作区的 `start_run` **拒** | **执法是正确的**——预检只是覆盖不到这个形状；但它意味着"预检=执法"这句话**只在数据目录这一层成立**，文档已按此收窄（`docs/configuration.md` §2）；**终验已实测复现该形状** | 二选一：给 `doctor` 增加**可选**的工作区参数（外部契约变更，需论证），或在文档里**显式**声明盲区并保留（当前已按后者处理，且已实测） |
+| R6-7 | **一条"证明不了没写"的测试推理**（低/方法论，终验发现）：`tests/unit/doctor-alias.test.ts` 用 `readdirSync(homedir())` 前后条目相等来钉"探针没写 home"，而该断言**在探针真的跑过时也会通过**（探针文件被 `finally` 删掉，测试注释自己也承认"for a moment"） | 结论本身由另一条可靠断言（`writable === "unknown"`）兜住，所以**不是**假绿；但**推理本身无效**——留着它会让后来者以为"没多条目"等价于"没写" | 把该用例的主证据改成 `writable === "unknown"`（已有），并补一个**能观察瞬时写**的机制（终验的做法：`fs.watch` 盯 `.doctor-write-probe-*`、断言事件数为 0）；删除或标注"前后条目相等**不足以**证明没写"的那句推理 |
 
 ### Wave R4（P3：发布工程、跨平台证据、进度可见性）
 

@@ -28,7 +28,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -80,6 +80,43 @@ function usage() {
     "  stdout = the SBOM itself (safe to redirect)；stderr = 摘要与错误。",
     "  默认 cyclonedx（npm sbom 的默认格式），默认包含整棵依赖树；`--omit dev` 只留生产面。",
   ].join("\n");
+}
+
+/**
+ * Validates an npm SBOM against the package it claims to describe.
+ *
+ * Exported (and side-effect free) so `tests/release/sbom.test.ts` can pin the rules without
+ * spawning npm. The subtle rule is the **name**: for the root project npm 10 derives
+ * `metadata.component.name` from the *checkout directory*, not from `package.json` — verified
+ * with a scratch project (`dir=zzz-not-the-package-name`, `package.json name=my-pkg` →
+ * `component.name=zzz-not-the-package-name`, `component.version=1.2.3`). Comparing the name to
+ * `package.json#name` alone therefore rejects every clone whose directory is renamed, so the
+ * directory name is accepted as well; the **version**, which npm does take from the manifest,
+ * stays a strict equality check.
+ *
+ * @returns {string[]} one message per problem (empty means the document is acceptable).
+ */
+export function validateDocument(document, { manifest, directoryName, format = "cyclonedx" }) {
+  const problems = [];
+  const component = document?.metadata?.component;
+  if (format === "cyclonedx" && document?.bomFormat !== "CycloneDX") {
+    problems.push(`bomFormat is ${JSON.stringify(document?.bomFormat)}, expected "CycloneDX"`);
+  }
+  if (format === "cyclonedx" && typeof document?.specVersion !== "string") {
+    problems.push("specVersion is missing");
+  }
+  const acceptableNames = new Set([manifest.name, directoryName].filter((value) => typeof value === "string"));
+  if (!acceptableNames.has(component?.name)) {
+    problems.push(
+      `metadata.component.name is ${JSON.stringify(component?.name)}, expected `
+      + `${JSON.stringify(manifest.name)} or the checkout directory name ${JSON.stringify(directoryName)}`,
+    );
+  }
+  if (component?.version !== manifest.version) {
+    problems.push(`metadata.component.version is ${JSON.stringify(component?.version)}, expected ${JSON.stringify(manifest.version)}`);
+  }
+  if (!Array.isArray(document?.components)) problems.push("components is not an array");
+  return problems;
 }
 
 function main() {
@@ -151,20 +188,11 @@ function main() {
   // The document must describe *this* package: an SBOM for another version would be worse than
   // no SBOM at all, because it looks authoritative.
   const component = document?.metadata?.component;
-  const problems = [];
-  if (options.format === "cyclonedx" && document?.bomFormat !== "CycloneDX") {
-    problems.push(`bomFormat is ${JSON.stringify(document?.bomFormat)}, expected "CycloneDX"`);
-  }
-  if (typeof document?.specVersion !== "string" && options.format === "cyclonedx") {
-    problems.push("specVersion is missing");
-  }
-  if (component?.name !== manifest.name) {
-    problems.push(`metadata.component.name is ${JSON.stringify(component?.name)}, expected ${JSON.stringify(manifest.name)}`);
-  }
-  if (component?.version !== manifest.version) {
-    problems.push(`metadata.component.version is ${JSON.stringify(component?.version)}, expected ${JSON.stringify(manifest.version)}`);
-  }
-  if (!Array.isArray(document?.components)) problems.push("components is not an array");
+  const problems = validateDocument(document, {
+    manifest,
+    directoryName: basename(REPO_ROOT),
+    format: options.format,
+  });
   if (problems.length > 0) {
     fail(`the SBOM does not match this package: ${problems.join("; ")}`);
     return;
@@ -198,8 +226,13 @@ function main() {
   );
 }
 
-try {
-  main();
-} catch (error) {
-  fail(error instanceof Error ? error.message : String(error));
+// Only run when executed as a program: `tests/release/sbom.test.ts` imports `validateDocument`
+// from this module, and an unconditional `main()` would make that import spawn npm.
+const invokedAsProgram = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedAsProgram) {
+  try {
+    main();
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
 }

@@ -17,12 +17,12 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_FORCE_STOP_GRACE_MS, DEFAULT_POLL_INTERVAL_MS, DEFAULT_READINESS_POLL_MS, DEFAULT_STOP_GRACE_MS, resolveAllowedRoots, resolveHarnessPackage, resolveInstallTimeoutMs, resolveStartupTimeoutMs } from "../config/resolve.js";
-import { dataLocationProblems, samePath } from "../policy/paths.js";
+import { dataLocationAliasProblems, samePath, type RealpathResult } from "../policy/paths.js";
 import {
   identityOwnsRecord,
   orphanState,
@@ -327,10 +327,15 @@ export class ServiceSupervisor {
     try {
       // P0-5, fail-closed: refuse an unsafe data location *before* any filesystem write. This
       // also covers injected spawn seams, which bypass `launch.ts#spawnHarness`.
-      const unsafe = dataLocationProblems({
+      //
+      // The alias-aware entry point (R5-1) resolves every path on disk first: without it a
+      // junction/symlink pointed at the user's home passed the spelling check and the Harness then
+      // populated the real home (`profiles/`, `storages/`, `.credentials.yaml`).
+      const unsafe = dataLocationAliasProblems({
         dataDirectory: this.dataDirectory,
         serviceHome,
         home: this.homeDirectory,
+        realpath: realpathOnDisk,
       });
       if (unsafe.length > 0) {
         throw new Error(["refusing to start the Harness with an unsafe data location", ...unsafe].join("\n"));
@@ -634,6 +639,26 @@ function portOfUrl(url: string): number | null {
 /** The per-workspace service home (`DSH_HOME`) below one data directory. */
 export function serviceHomeFor(dataDirectory: string, workspace: string): string {
   return join(dataDirectory, "services", workspaceKey(workspaceDigest(workspace)));
+}
+
+/**
+ * The P0-5 guard's view of one path on disk (R5-1): `realpathSync`, or the errno that stopped it.
+ *
+ * It lives here rather than in `policy/paths.ts` because that module is pure by contract (the
+ * boundary test allows it `node:path` only — `tests/module-boundaries.test.ts:76`), while this *is*
+ * filesystem IO. The policy side stays a decision table; the service layer supplies the facts.
+ *
+ * `ELOOP` (a symlink cycle) and `EACCES` are deliberately **not** softened into "ENOENT": the
+ * guard treats any unexplained path as a refusal, and a resolver that cannot explain a path is not
+ * evidence that the path is safe.
+ */
+export function realpathOnDisk(path: string): RealpathResult {
+  try {
+    return { ok: true, path: realpathSync(path) };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    return { ok: false, code: typeof code === "string" ? code : null };
+  }
 }
 
 /** Default loopback port probe: a TCP connect is the same evidence `listens()` uses in the smoke. */

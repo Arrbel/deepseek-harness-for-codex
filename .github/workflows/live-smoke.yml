@@ -58,7 +58,8 @@ jobs:
             npm-live-${{ runner.os }}-
 
       - name: Install from the lockfile
-        run: npm ci
+        # `--ignore-scripts` (R5-2): see reports/r5-publish-surface.md — no install hook is needed.
+        run: npm ci --ignore-scripts
 
       - name: Prepare the plugin payload and run the hermetic gate first
         run: npm run prepare:plugin

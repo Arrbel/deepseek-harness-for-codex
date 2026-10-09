@@ -1,13 +1,23 @@
-// R4-1: the release workflow's structural invariants.
+// R4-1 (extended by R5-3): the release workflow's structural invariants.
 //
 // `release.yml` cannot run locally (no runner, no OIDC, no artifacts), so what can be pinned
 // down is its *shape*: this suite parses the file into a structure (see `./yaml.ts`) and asks
 // questions about jobs and steps, rather than grepping for strings. The headline invariant is
-// "no step in any job publishes anything" — it is checked by scanning every `run:` script and
-// every `uses:` reference, so a publish smuggled into any step fails here.
+// "no step in any job publishes anything" — checked by scanning every `run:` script and every
+// `uses:` reference with the tolerant patterns from `./publish-surface.ts` (which catches
+// `npm --prefix . publish`, quote concatenation and direct registry HTTP).
+//
+// **Scope of that claim (R5-3 honesty fix)**: this is a static text/structure scan of the files
+// in this repository. It does *not* catch dynamically built commands (`node -e`, `bash -c`), a
+// publish performed by a third-party action with an innocent name, credentials injected from
+// outside the tree, third-party install scripts, `package.json#scripts` indirection or
+// `scripts/**` — the last two are covered by `./publish-surface.test.ts`, and the authoritative
+// list of remaining blind spots is the module header of `./publish-surface.ts` plus
+// `reports/r5-publish-surface.md`. A publish smuggled in as `npm publish` in a step fails here;
+// an obfuscated one may not.
 
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -190,7 +200,12 @@ describe("package.json: the release surface the workflow packs", () => {
       expect(covered, `${path} is packed but not covered by package.json#files`).toBe(true);
     }
     for (const directory of declaredDirectories) {
-      expect(paths.some((path) => path.startsWith(directory)), `${directory} is declared but not packed`).toBe(true);
+      // `dist/` and the plugin payload are generated and git-ignored, so a fresh clone (and thus
+      // a fresh CI checkout, where `npm test` runs *before* `npm run build`) legitimately has
+      // nothing to pack for them. Only a directory that exists on disk must actually be packed;
+      // the release workflow's ordering (check → build → pack) covers the generated case.
+      if (!existsSync(join(repoRoot, directory))) continue;
+      expect(paths.some((path) => path.startsWith(directory)), `${directory} exists but is not packed`).toBe(true);
     }
     for (const forbidden of ["src/", "tests/", "scripts/", "docs/", ".github/", "CHANGELOG.md", "plugins/"]) {
       expect(paths.some((path) => path.startsWith(forbidden)), `${forbidden} must not be published`).toBe(false);

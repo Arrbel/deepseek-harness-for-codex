@@ -188,7 +188,7 @@ Run status and failure reasons (`RunSnapshot`):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `DSH_MCP_DATA_DIR` | `~/.deep-seek-harness-mcp` | Data directory: `versions/<version>/` holds the locally installed Harness runtime package, `services/<workspace hash>/` holds each workspace's DSH_HOME (sessions and settings). |
+| `DSH_MCP_DATA_DIR` | `~/.deep-seek-harness-mcp` | Data directory: `versions/<version>/` holds the locally installed Harness runtime package, `services/<workspace hash>/` holds each workspace's DSH_HOME (sessions and settings). **The location guard resolves aliases**: a symbolic link or junction that points at the user's home directory (or a directory inside it) is refused, and a failed resolution (a symlink loop, for instance) is refused too — "cannot resolve" is not evidence of safety. An explicitly written `~/.deep-seek-harness-mcp` layout is unaffected. |
 | `DSH_MCP_HARNESS_PACKAGE` | `@deepseek-ai/dsh@0.2.1-alpha.1` | The **exact** npm spec for the local Harness runtime (it must be written `name@x.y.z`). Ranges (`^`, `~`, `>`, `x`, `*`) and dist-tags (`latest`, `next`) are **rejected**: the registry's `latest` is older than this project's release line, so resolving a range would silently downgrade. |
 | `DSH_MCP_NPM_CLI` | derived from `process.execPath` | Absolute path of `npm-cli.js`. npm is always invoked as `node <that file> install …` with `shell: false` (never through `npm.cmd`, so there is no shell injection surface). Set it only when the derivation fails; a relative or missing path fails immediately. |
 | `DSH_MCP_INSTALL_TIMEOUT_MS` | `900000` | One-off install budget for the runtime package, independent of the startup budget (install progress resets it). |

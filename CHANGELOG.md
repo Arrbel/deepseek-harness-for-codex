@@ -28,6 +28,20 @@
 
 系统化改造的进度以 `docs/roadmap.md` 为准；架构约束见 `docs/architecture.md`。
 
+### Fixed（Wave R6：把"检查工具自己违反被检查的规则"这类缺陷修掉）
+
+- **`doctor` 与 `start_run` 对同一个别名给出不同结论**（预检/执法不一致）：R5-1 的别名感知入口当时只接在启动路径上，`doctor` 仍是纯拼写层，于是指向 home 的**同一个** junction 会得到"`doctor` 说没问题、启动被拒"。现在 `doctor` 的位置检查复用**同一个**入口与**同一个** realpath 解析器，消息**逐字复用**护栏原文（`prerequisites` 4→5 项，`ready` 判据与 **20 键**契约未变）。**已知边界（如实声明）**：`doctor` 的预检是**数据目录级**的（没有工作区上下文），因此若 `<dataDir>/services/<workspaceKey>` **本身**是指向他处的链接而 `<dataDir>/services` 不是，预检会 `ready:true` 而该工作区的启动会拒——**执法正确、预检覆盖不到**，已登记为下一轮的 R6-6。
+- **`doctor` 的可写性探针会在不安全的位置里真的写文件**（本轮顺带发现，同类缺陷）：探针原先跑在安全检查**之前**，于是当数据目录是一个**指向用户 home 的别名**时，"建临时文件→删除"这个探测会**在真实 home 里创建一个文件**——正是 P0-5 要防的那类写。现在位置不安全时**不执行探针**，直接返回 `writable: "unknown"`（**"不测"优于"乱测"**）。
+- **全量测试有 75% 概率红**（与改动无关的假红，会让 CI 门禁不可信）：`tests/run/orchestrator.test.ts` 有一处**时序假设**——"第一个观察窗口里回合恰好还活着"。独立验证量化：全量连跑 8 次 **6 次红**、同文件单独跑 **8/8 绿**，失败恒为 `expected 'succeeded' to be 'running'`（`succeeded` 正是该测试自己随后断言的正确终态）。现在 fake Host 的回合**可被测试显式放行**（`FIXTURE_TURN_HOLD=1` + `POST /__fixture/release`）：观察窗口里的"活着"成了 Host 的**状态**而非"还没到时间"，持有期间**没有计时器**，因此不再受负载压缩。**改后 15 次全量连跑：line102 命中 0/15**（8/8 那一轮逐次贴出），并新增 3 条反向验证（改回依赖时序 / 夹具忽略持有 / 移除放行路由 —— 全部变红后逐字节还原）。该用例**净增 5 条断言**（含进度投影），其余 21 条无删除、无跳过、无放宽。**`src/**` 一行未动**——产品行为本来就是对的。
+
+### Fixed（Wave R5：把"护栏"与"发布面"补到边界上）
+
+- **P0-5 护栏的别名层（安全；红线文件）**：护栏此前只比较**路径拼写**，因此一个**指向 home 的符号链接/junction** 作为数据目录会被接受，写入真的穿透进 home（两个独立验证者分别复现）。现在新增生产入口 `dataLocationAliasProblems`（拼写层 + **磁盘身份层**）：路径存在时比较 `realpath`，不存在时回退到**最近存在祖先**的 realpath；解析失败（`ELOOP`/`EACCES`/未知 errno）一律 **fail-closed 拒绝**——"解析不出来"不是"安全"的证据。纯拼写层函数保持原样（既有 23 条穷举与跨平台断言逐字节不变），并用**结构性用例**钉住"生产只调强入口"。**修复经对抗复攻确认**：原攻击在单元层与真实 `ServiceSupervisor.start()` 上都失败，另有**正对照**证明"被拒"来自护栏而不是探针跑不起来。
+- **`npm ci` 的安装生命周期钩子面**：`npm ci` 会执行 root 的 `preinstall`/`install`/`postinstall`/`prepare`，而它们**不经过任何锁文件审查**——这是把发布步骤藏进 CI 的一等位置（`release.yml` 还持有 `id-token: write`）。三处 workflow 改为 `npm ci --ignore-scripts`（**等价性已用忠实的 CI 模拟证明**：`npm run check` exit 0），并新增**结构性门禁**：`preinstall`/`install`/`postinstall`/`prepare`/`prepublish` 必须不存在，`prepack`/`prepublishOnly` 必须逐字等于审查值（带反例验证）。
+- **"绝不 publish"检测器的盲点与自述**：检测面扩到 `--prefix`/`--global`/`--filter`/`--cwd`/`=` 等形态，并扫描 `package.json#scripts`、`.npmrc`、`scripts/**`；R4 复核打出的 4 个漏检形状（含 `npm --prefix . publish`）**全部被捕获**。同时把模块注释改成**与能力相符**的两节——"能看见什么 / **诚实地看不见**什么"（依赖自身的安装脚本、树外 Secrets、其它分支或 `workflow_run` 链、动态拼接命令等），**不再声称强于实现**。
+- **`journal` 的 `error` 字段脱敏**：写入与读回两处统一过脱敏（与 `drift.ts` 的逐字段纪律一致）。**边界如实**：`?token=` 走模式层，`Bearer`/base64url 靠**注册表**层，未注册的串仍不会被擦（已登记为下一轮的 R6-2）。
+- **折叠策略不再有默认值**：`foldForComparison` 的 `platform`/`policy` 均**必填**——漏传即 `TS2554` 编译失败（历史形态是"默认取最宽的折叠"，未来某个破坏性调用点忘传就会静默扩大杀/删面）。**强度边界如实**：它消灭"意外漏参"，蓄意用 `@ts-expect-error`/断言绕过会**运行期崩**（fail-loud），不会静默放宽。
+
 ### Added（Wave R4：发布工程、跨平台证据与进度可见性）
 
 - **`release.yml`（tag 触发）+ `npm run sbom`**：`push.tags: v*` → `npm ci` → `npm run check` → `npm pack` → SBOM（CycloneDX）→ 上传 `npm-tarball`/`sbom-cyclonedx` → `attest-build-provenance`。**流水线里没有任何发布动作**，而且这不是靠注释保证的：仓库不允许新增 YAML 依赖，于是新增了一个**只读的子集解析器**把 workflow 解析成 `{jobs:[{steps}]}` 模型，17 条不变量覆盖"每个 `run`/`uses`/`with`/`env` 都不含发布面"、触发条件只能是 tag、有效权限必须含 `id-token`/`attestations`、两个 artifact 都上传、`npm pack` 产物面 == `package.json#files`。`npm run sbom` 与 CI 同一套参数：生产依赖面 **0 个组件**（`dependencies` 为空），除 `serialNumber`/`timestamp` 外逐字节确定。

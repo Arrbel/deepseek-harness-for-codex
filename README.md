@@ -185,7 +185,7 @@ codex mcp add deepseek-harness -- npx --yes --package=deepseek-harness-for-codex
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `DSH_MCP_DATA_DIR` | `~/.deep-seek-harness-mcp` | 数据目录：其下 `versions/<版本>/` 存放本地安装的 DSH 运行时包，`services/<工作区哈希>/` 保存各工作区的 DSH_HOME（会话与设置）。 |
+| `DSH_MCP_DATA_DIR` | `~/.deep-seek-harness-mcp` | 数据目录：其下 `versions/<版本>/` 存放本地安装的 DSH 运行时包，`services/<工作区哈希>/` 保存各工作区的 DSH_HOME（会话与设置）。**位置护栏会解析别名**：指向用户主目录（或其子目录）的**符号链接 / junction** 会被拒绝，解析失败（如符号链接环）也一律拒绝——"解析不出来"不算"安全"。显式写出的 `~/.deep-seek-harness-mcp` 这种布局不受影响。 |
 | `DSH_MCP_HARNESS_PACKAGE` | `@deepseek-ai/dsh@0.2.1-alpha.1` | 本地 Harness 运行时使用的**精确** npm spec（必须写成 `name@x.y.z`）。range（`^`/`~`/`>`/`x`/`*`）与 dist-tag（`latest`/`next`）会被**拒绝**：registry 上的 `latest` 低于本项目使用的版本线，解析 range 只会静默降级。 |
 | `DSH_MCP_NPM_CLI` | 由 `process.execPath` 推导 | `npm-cli.js` 的**绝对路径**。npm 始终以 `node <该文件> install …` + `shell:false` 调用（不经过 `npm.cmd`，因此没有 shell 注入面）；只有自动推导失败时才需要手动设置，相对路径或文件不存在会立即报错。 |
 | `DSH_MCP_INSTALL_TIMEOUT_MS` | `900000` | 运行时包的一次性安装预算；与启动预算相互独立（安装进度输出会重置它）。 |

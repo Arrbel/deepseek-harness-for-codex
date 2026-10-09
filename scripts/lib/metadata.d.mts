@@ -60,6 +60,12 @@ export const SCANNED_TEXT_RELS: string[];
 export const MCP_ENV_VARS: string[];
 export const REQUIRED_PACKAGE_FILES: string[];
 export const REQUIRED_SCRIPT_GATES: Record<string, string>;
+/** R5-2: hooks `npm ci` runs for the root package — banned outright. */
+export const CI_LIFECYCLE_HOOKS: string[];
+/** R5-2: pack/publish-only hooks allowed with exactly this reviewed command. */
+export const ALLOWED_LIFECYCLE_HOOKS: Record<string, { command: string; reason: string }>;
+/** R5-2: hooks that only `npm pack`/`npm publish` reach. */
+export const PUBLICATION_LIFECYCLE_HOOKS: string[];
 
 export function sha256(text: string): string;
 export function renderVersionTs(input: { name: string; version: string }): string;

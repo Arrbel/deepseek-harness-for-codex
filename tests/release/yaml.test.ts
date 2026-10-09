@@ -110,6 +110,14 @@ describe("tests/release/yaml (block-subset reader)", () => {
     expect(() => parseYaml("just a scalar with no colon")).toThrow(/key: value/u);
   });
 
+  it("refuses duplicate keys, so a command cannot be masked by a later one", () => {
+    expect(() => parseYaml("step:\n  run: npm ci\n  run: npm publish\n")).toThrow(/duplicate key/u);
+    // `null` still counts as present: `run:` followed by a real `run:` is a duplicate too.
+    expect(() => parseYaml("step:\n  run:\n  run: npm ci\n")).toThrow(/duplicate key/u);
+    // The same key at different levels is fine.
+    expect(mappingOf("jobs:\n  a:\n    runs-on: x\n  b:\n    runs-on: y\n")).toBeDefined();
+  });
+
   it("parses the real check.yml exactly as written", () => {
     const workflow = loadWorkflow(join(workflowDir, "check.yml"));
     const check = workflow.jobs.find((job) => job.id === "check");

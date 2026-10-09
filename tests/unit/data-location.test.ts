@@ -3,11 +3,20 @@
 // The accident behind them: a script pointed `DSH_HOME` at `C:\Users\<user>`, and the Harness
 // populated the user's home with `profiles/`, `storages/`, and `.credentials.yaml`.
 // Every rule is checked *before* any directory is created (see the supervisor tests).
+//
+// R5-1 added the second half: the rules above compare *spellings*, so a junction/symlink pointed at
+// the home directory used to be accepted (reproduced by two independent verifiers). The
+// `alias-aware guard` suite below creates real links — always inside a temporary directory, with a
+// decoy "home" — and asserts the refusal, the nearest-existing-ancestor walk, and that removing the
+// link restores the accepted verdict.
 
-import { homedir } from "node:os";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
-import { dataLocationProblems } from "../../src/policy/paths.js";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import { dataLocationAliasProblems, dataLocationProblems } from "../../src/policy/paths.js";
+import { realpathOnDisk } from "../../src/service/supervisor.js";
 import "../support/isolation.js";
 
 const home = join(resolve("C:\\Users\\tester"));
@@ -124,5 +133,146 @@ describe("data location safety (P0-5)", () => {
       serviceHome: join(realData, "services", "k"),
       home: homedir(),
     })).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// R5-1: the alias-aware guard, exercised against real junctions/symlinks. Everything here lives
+// inside a temporary directory; the "home" is a decoy directory, never the real one.
+// ---------------------------------------------------------------------------------------------
+
+const scratchRoots: string[] = [];
+
+function scratch(): string {
+  const directory = mkdtempSync(join(tmpdir(), "dsh-alias-"));
+  scratchRoots.push(directory);
+  return directory;
+}
+
+/** Removes the link itself, never what it points at (works for junctions and POSIX symlinks). */
+function removeLink(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    rmdirSync(path);
+  }
+}
+
+/** Creates a directory link; `false` when this host refuses (some Windows configurations). */
+function link(target: string, path: string): boolean {
+  try {
+    symlinkSync(target, path, "junction");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+afterEach(() => {
+  for (const directory of scratchRoots.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+describe("alias-aware guard: real junctions and symlinks (R5-1)", () => {
+  it("is the entry point the supervisor actually calls (structural guard)", () => {
+    // The unit tests above prove the *mechanism*; this pins the *wiring*, so a future refactor
+    // cannot quietly go back to the spelling-only guard in production.
+    const source = readFileSync(fileURLToPath(new URL("../../src/service/supervisor.ts", import.meta.url)), "utf8");
+
+    expect(source).toContain("dataLocationAliasProblems({");
+    expect(/\bdataLocationProblems\(\{/u.test(source)).toBe(false);
+  });
+
+  it("refuses a data directory that reaches the home directory through a link", () => {
+    const root = scratch();
+    const decoyHome = join(root, "home");
+    const alias = join(root, "alias");
+    mkdirSync(decoyHome);
+    if (!link(decoyHome, alias)) return; // no link privileges: the fake-resolver cases cover this
+
+    const input = { dataDirectory: alias, serviceHome: join(alias, "services", "a"), home: decoyHome };
+    // The spelling layer is the defect: it accepts, because the two strings are different.
+    expect(dataLocationProblems(input)).toEqual([]);
+
+    const problems = dataLocationAliasProblems({ ...input, realpath: realpathOnDisk });
+
+    expect(problems.join("\n")).toMatch(/must not be the user's home directory/u);
+    // Nothing was written into the decoy home: the guard is a decision, not a cleanup.
+    expect(readdirSync(decoyHome)).toEqual([]);
+  });
+
+  it("refuses a not-yet-existing directory below such a link (nearest existing ancestor)", () => {
+    const root = scratch();
+    const decoyHome = join(root, "home");
+    const alias = join(root, "alias");
+    mkdirSync(decoyHome);
+    if (!link(decoyHome, alias)) return;
+
+    // The data directory does not exist yet — which is the normal case for a first start, and the
+    // reason a plain `realpath` of it would fail with ENOENT and conclude "nothing to check".
+    const dataUnderAlias = join(alias, "data");
+    const input = { dataDirectory: dataUnderAlias, serviceHome: join(dataUnderAlias, "services", "a"), home: decoyHome };
+    expect(dataLocationProblems(input)).toEqual([]);
+
+    const problems = dataLocationAliasProblems({ ...input, realpath: realpathOnDisk });
+
+    expect(problems.join("\n")).toMatch(/resolves into the user's home directory through an alias/u);
+    expect(problems.join("\n")).toContain(dataUnderAlias);
+  });
+
+  it("accepts the same path again once the link is gone", () => {
+    const root = scratch();
+    const decoyHome = join(root, "home");
+    const alias = join(root, "alias");
+    mkdirSync(decoyHome);
+    if (!link(decoyHome, alias)) return;
+
+    const input = { dataDirectory: alias, serviceHome: join(alias, "services", "a"), home: decoyHome };
+    expect(dataLocationAliasProblems({ ...input, realpath: realpathOnDisk })).not.toEqual([]);
+
+    removeLink(alias);
+
+    // The path is now an ordinary (not yet existing) directory outside the home: acceptable.
+    expect(dataLocationAliasProblems({ ...input, realpath: realpathOnDisk })).toEqual([]);
+    expect(readdirSync(decoyHome)).toEqual([]);
+  });
+
+  it("catches a DSH_HOME that escapes the data directory through a link", () => {
+    const root = scratch();
+    const decoyHome = join(root, "home");
+    const data = join(root, "data");
+    const elsewhere = join(root, "elsewhere");
+    mkdirSync(decoyHome);
+    mkdirSync(data);
+    mkdirSync(elsewhere);
+    const escape = join(data, "escape");
+    if (!link(elsewhere, escape)) return;
+
+    const input = { dataDirectory: data, serviceHome: escape, home: decoyHome };
+    // Spelled inside the data directory, but that is a link to somewhere else.
+    expect(dataLocationProblems(input)).toEqual([]);
+
+    expect(dataLocationAliasProblems({ ...input, realpath: realpathOnDisk }).join("\n"))
+      .toMatch(/DSH_HOME must live underneath/u);
+  });
+
+  it("accepts the documented home-relative layout even when the home itself is a link", () => {
+    const root = scratch();
+    const realHome = join(root, "real-home");
+    const homeLink = join(root, "home-link");
+    mkdirSync(realHome);
+    if (!link(realHome, homeLink)) return;
+
+    const data = join(homeLink, ".deep-seek-harness-mcp");
+    const problems = dataLocationAliasProblems({
+      dataDirectory: data,
+      serviceHome: join(data, "services", "a"),
+      home: homeLink,
+      realpath: realpathOnDisk,
+    });
+
+    // `<home>/.deep-seek-harness-mcp` is the recommended default: the operator spelled the home
+    // path out, so this is not the "hidden alias" the rule refuses.
+    expect(problems).toEqual([]);
+    expect(readdirSync(realHome)).toEqual([]);
   });
 });

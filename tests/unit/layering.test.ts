@@ -7,10 +7,11 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { isWithin, samePath } from "../../src/policy/paths.js";
+import { dataLocationAliasProblems, isWithin, samePath } from "../../src/policy/paths.js";
 import { parseExactPackageSpec, satisfiesNodeRange, SUPPORTED_NODE_RANGE, RuntimePackageError } from "../../src/policy/package-spec.js";
 import { optionalSessionId, requireTask } from "../../src/policy/trusted-input.js";
 import { resolveWorkspace } from "../../src/policy/workspace.js";
+import { realpathOnDisk } from "../../src/service/supervisor.js";
 import { workspaceKey, WORKSPACE_KEY_LENGTH } from "../../src/util/ids.js";
 import { appendBounded, errorText, tail } from "../../src/util/errors.js";
 import "../support/isolation.js";
@@ -112,6 +113,36 @@ describe("policy/workspace", () => {
     }
 
     await expect(resolveWorkspace(link, [allowed])).rejects.toThrow("outside DSH_MCP_WORKSPACE_ROOTS");
+  });
+
+  it("agrees with the data-directory guard about the on-disk target (R5-1 consistency)", async () => {
+    // The two guards must not disagree about what a path *is*. Both resolve through the OS
+    // (`node:fs`'s realpath) before comparing, and both fail closed when resolution fails; they
+    // differ only in the fallback — a workspace must exist, while a data directory legitimately
+    // may not exist yet, which is why the data guard walks to the nearest existing ancestor.
+    const root = scratch();
+    const allowed = join(root, "allowed");
+    const decoyHome = join(root, "home");
+    mkdirSync(allowed);
+    mkdirSync(decoyHome);
+    const alias = join(root, "alias");
+    try {
+      symlinkSync(decoyHome, alias, "junction");
+    } catch {
+      return; // no link privileges on this host
+    }
+
+    // Workspace guard: the alias is judged (and returned) as its real target …
+    await expect(resolveWorkspace(alias, [allowed])).rejects.toThrow("outside DSH_MCP_WORKSPACE_ROOTS");
+    await expect(resolveWorkspace(alias, [decoyHome])).resolves.toBe(decoyHome);
+
+    // … and the data-directory guard refuses the very same alias as "the user's home directory".
+    expect(dataLocationAliasProblems({
+      dataDirectory: alias,
+      serviceHome: join(alias, "services", "a"),
+      home: decoyHome,
+      realpath: realpathOnDisk,
+    }).join("\n")).toMatch(/must not be the user's home directory/u);
   });
 });
 

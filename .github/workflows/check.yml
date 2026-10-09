@@ -56,7 +56,11 @@ jobs:
             npm-${{ runner.os }}-node${{ matrix.node }}-
 
       - name: Install from the lockfile
-        run: npm ci
+        # `--ignore-scripts` (R5-2): an install lifecycle hook is an execution surface that no
+        # lockfile review covers. Nothing in this project's toolchain needs one — verified by
+        # running the build, the self-contained plugin probe and the SBOM in a fresh copy
+        # installed this way (reports/r5-publish-surface.md).
+        run: npm ci --ignore-scripts
 
       - name: Run the full gate (typecheck, tests, metadata, build, self-contained probe)
         run: npm run check
@@ -95,7 +99,7 @@ jobs:
           node-version: "22.x"
 
       - name: Install from the lockfile
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Audit the production dependency surface (informational)
         continue-on-error: true

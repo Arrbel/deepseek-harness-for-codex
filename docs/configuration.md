@@ -47,6 +47,13 @@ Node 引擎要求由本项目自带：`^22.19.0 || >=24.0.0`（`doctor.engines` 
 - **不污染用户全局状态**：DSH 的 `DSH_HOME` 指向 `services/<hash>/`，与用户自己的 `~/.dsh` 或 `%APPDATA%\DSH` 完全隔离。
 - **凭据**：`services/<hash>/.credentials.yaml` 含 DSH 自身的会话签名密钥，属敏感文件；`data` 目录应保持仅当前用户可读。
 - **解析责任**：数据目录与环境默认值只在**组合根**（`src/app/container.ts` → `config/resolve.ts`）解析一次后显式注入 service 层；service 层不得自行读环境或回退默认值——否则"注入假启动"的测试路径会写到真实目录（该缺陷的真实案例见 `reports/fix-test-isolation.md`）。
+- **位置护栏（含别名解析，R5-1 起）**：数据目录必须满足**拼写层**四条——绝对路径、不是文件系统根、不是用户主目录或其直接父级、`DSH_HOME` **严格**位于数据目录之下。在此之上还要比较**磁盘身份**：路径存在时解析其 `realpath`，不存在时回退到**最近存在祖先**的 `realpath`，并用同一张规则表再判一次。因此：
+  - **指向 home（或 home 的某个子目录）的符号链接 / junction 也会被拒**，即使它的拼写看起来无害——被拒的是"被别名藏起来的落点"；
+  - **解析失败一律拒绝**（`ELOOP` 符号链接环、`EACCES`、未知 errno、解析器抛异常）：**"解析不出来"不是"安全"的证据**（fail-closed）；
+  - **唯一例外**：**显式写出的** home 相对布局（默认的 `~/.deep-seek-harness-mcp`）照常接受——它与"别名藏起来的落点"是两种意图，不是两种路径。
+  - **预检与执法一致（在数据目录这一层）**：`doctor` 的位置检查与 `start_run` 的启动检查走**同一个**入口（同一个 `dataLocationAliasProblems` + 同一个 realpath 解析器），对**数据目录级**的不安全位置两者结论一致——不允许出现"`doctor` 说没问题、启动却被拒"。**已知边界**：`doctor` 的预检是**数据目录级**的（它没有工作区上下文），因此若 `<dataDir>/services/<workspaceKey>` **本身**是指向他处的链接、而 `<dataDir>/services` 不是，预检会 `ready:true`、而该工作区的 `start_run` 会拒——**执法正确、预检覆盖不到**（已登记为下一轮的 R6-6：给 `doctor` 增加**可选**的工作区参数）。
+  - **"不测"优于"乱测"**：位置不安全时 `doctor` **不执行**可写性探针，直接返回 `writable: "unknown"`——因为"建临时文件→删除"这个探针**本身**会在别名指向的目录里写一个文件；若不安全的位置恰好是用户 home，探针就成了 P0-5 要防的那种写（该缺陷已在 R6 轮修掉，见 `reports/r6-doctor-alias-consistency.md` 的 N-R5-1b）。
+  - 大小写语义遵循同一条原则：**保护性比较**（拒绝越多越安全）在 `win32`+`darwin` 折叠（macOS 默认 APFS 大小写不敏感），而**不可逆动作**的比较（真的 signal 进程、真的删目录）保持平台原生语义。详见 `reports/r5-alias-hardening.md` 与 `reports/verify-r5-adversarial.md`。
 - **可写性探测不创建目录**：`doctor` 只在目录**已存在**时做"建临时文件→删除"的真实可写探测；目录不存在时返回 `exists=false, writable="unknown"`。任何"顺手 mkdir 一下"的行为都被禁止——诊断工具的副作用必须为零。
 - **doctor 字段**：18 个顶层字段，其中 `dataDirectory = { path, source, exists, writable }`；`source ∈ {DSH_MCP_DATA_DIR, PLUGIN_DATA, default}`（见 §1 的优先级）；`orphans` 列出各服务目录里的进程记录（`state ∈ {alive, unverified, stale-pidfile}`），存在孤儿只会**追加提示性 `problems`**。`ready` 为四项制（引擎/ npm CLI /可写性/spec 合法性），失败原因在 `problems` 数组里逐条给出——新增字段不会扩大 `ready` 的语义。
 

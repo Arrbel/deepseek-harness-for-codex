@@ -56,6 +56,14 @@ function spawnLaunch(launch: HarnessLaunch): ChildProcess {
     windowsHide: true,
   });
 }
+/** Releases a turn the fixture is holding (`FIXTURE_TURN_HOLD`); returns how many it settled. */
+async function releaseTurn(webUrl: string): Promise<number> {
+  const response = await fetch(new URL("/__fixture/release", new URL(webUrl).origin), { method: "POST" });
+  expect(response.status).toBe(200);
+  const body = await response.json() as { released: number };
+  return body.released;
+}
+
 describe("Harness run orchestration through the container", () => {
   let temporaryRoot: string;
   let workspace: string;
@@ -98,17 +106,32 @@ describe("Harness run orchestration through the container", () => {
     afterEach(async () => { await manager.close(); });
 
     it("submits the task into the visible Web session", async () => {
+      // The turn is **held open by the fake Host** (`FIXTURE_TURN_HOLD`) instead of settling on a
+      // 40 ms timer, so observing a live run is deterministic rather than a race the machine's load
+      // decides. The hold is registered synchronously when the prompt is accepted, so no amount of
+      // load can let the terminal marker reach the first observation window. The test then releases
+      // the turn and asserts the same convergence it always asserted.
+      manager = createManager({ FIXTURE_TURN_HOLD: "1" });
       const started = await manager.start({ task: "implement feature", workspace, openBrowser: true });
+
       expect(started.status).toBe("running");
       expect(started.webUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?token=fixture-token$/);
       expect(started.sessionId).toBe("session-1");
       expect(started.sessionReused).toBe(false);
+      // "Alive" is not just a status: the running projection names the open step (R3-5), and no
+      // terminal turn can have been seen yet — the Host has not published one.
+      expect(started.progress.current).toMatchObject({ turn: 1, step: 1 });
+      expect(started.progress.finished).toBe(0);
+
+      const released = await releaseTurn(started.webUrl);
+      expect(released).toBe(1);
 
       const completed = await manager.wait(started.runId, 2_000);
       expect(completed.status).toBe("succeeded");
       expect(completed.assistantText).toBe("completed:implement feature");
       expect(completed.lastEventSeq).toBe(5);
       expect(completed.error).toBeNull();
+      expect(completed.progress.current).toBeNull();
     });
 
     it("reuses one Web service for later tasks in the workspace", async () => {

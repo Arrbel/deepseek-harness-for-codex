@@ -11,11 +11,14 @@
 
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, type Dirent } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { identityOwnsRecord, orphanProblem, orphanState, parsePidFile, pidFilePath, type OrphanReport } from "../policy/orphans.js";
+import { dataLocationAliasProblems, type RealpathLookup } from "../policy/paths.js";
 import { SUPPORTED_NODE_RANGE, directorySizeSync, inspectInstalledRuntime, resolveRuntimeLayout, satisfiesNodeRange } from "../service/runtime-package.js";
 import { isProcessAlive, readProcessIdentity } from "../service/process-tree.js";
 import { findNpmCli, resolveNpmCli } from "../service/npm-cli.js";
+import { realpathOnDisk } from "../service/supervisor.js";
 import {
   DEPRECATED_ENV_VARS,
   resolveAllowedRoots,
@@ -99,10 +102,16 @@ function runtimePackageReport(env: NodeJS.ProcessEnv): RuntimePackageReport {
  * A directory that does not exist is `unknown`, not `no`: the first install creates it, and a
  * probe that creates a directory would be indistinguishable from a leak. The probe file is
  * removed in every branch.
+ *
+ * N-R5-1: a location the runner will refuse is **never probed**. A junction pointing at the user's
+ * home *exists* and *is a directory*, so the probe would otherwise create (and delete) a file
+ * inside the real home — the very write the P0-5 guard exists to prevent. Such a location is
+ * reported as `unknown` (not measured), and the actionable problem comes from the guard itself.
  */
-function dataDirectoryReport(env: NodeJS.ProcessEnv): DataDirectoryReport {
+function dataDirectoryReport(env: NodeJS.ProcessEnv, locationProblems: readonly string[]): DataDirectoryReport {
   const { path, source } = resolveDataDirectoryInfo(env);
   if (!existsSync(path)) return { path, source, exists: false, writable: "unknown" };
+  if (locationProblems.length > 0) return { path, source, exists: true, writable: "unknown" };
   let isDirectory = false;
   try {
     isDirectory = statSync(path).isDirectory();
@@ -119,6 +128,51 @@ function dataDirectoryReport(env: NodeJS.ProcessEnv): DataDirectoryReport {
     return { path, source, exists: true, writable: "no" };
   } finally {
     rmSync(probe, { force: true });
+  }
+}
+
+/**
+ * The P0-5 verdict for the data directory, **alias-aware** (N-R5-1).
+ *
+ * Why this exists: `doctor` answers "can this start safely?", so it must not say yes where the
+ * runner says no. The runner refuses an unsafe data location in `supervisor.ts` (alias-aware since
+ * R5-1); `doctor` used to never ask that question, so a junction pointing at the user's home
+ * produced `ready:true` and then a refused start — the worst possible pair for an operator.
+ *
+ * Direction of the alignment is **refuse-aligned**, never permissive: this adds problems, it never
+ * removes the runner's check. A location `doctor` clears must still pass the runner's own guard.
+ *
+ * `DSH_HOME` is workspace-specific (`<dataDir>/services/<workspace key>`), and a pre-flight has no
+ * workspace, so the probe uses `<dataDir>/services` — the directory every per-workspace home lives
+ * in. The containment rule and every alias rule therefore apply to it. (A link at the per-workspace
+ * *leaf* is still only observable at `start_run`; recorded as a residual in the report.)
+ *
+ * Never throws: like everything else here, an unusable location is reported.
+ *
+ * Exported for the tests, with the production resolver as the default. The default is the *real*
+ * thing (never a weakening), so a call site that omits it still gets the alias-aware verdict; the
+ * parameter exists so a test can inject a failing resolver and prove the fail-closed branch.
+ */
+export function dataLocationPrerequisiteProblems(
+  dataDirectory: string,
+  realpath: RealpathLookup = realpathOnDisk,
+): string[] {
+  try {
+    const problems = dataLocationAliasProblems({
+      dataDirectory,
+      serviceHome: join(dataDirectory, "services"),
+      home: homedir(),
+      realpath,
+    });
+    // The guard's own message text is reused verbatim so the pre-flight and the runner point at the
+    // same defect in the same words (`reports/r6-doctor-alias-consistency.md`).
+    return problems.map((problem) => `Unsafe data location: ${problem}`);
+  } catch (error) {
+    // Fail closed: a location this surface cannot evaluate is not one to call ready.
+    return [
+      "Unsafe data location: the data directory could not be checked "
+        + `(${error instanceof Error ? error.message : String(error)}) — fix the path, or point DSH_MCP_DATA_DIR at a directory this process can resolve.`,
+    ];
   }
 }
 
@@ -190,7 +244,10 @@ export interface PrerequisiteInputs {
  *
  * These are the **only** input of `ready` (`prerequisites.length === 0` ⇔ ready): a `ready=false`
  * that does not explain itself forces the caller to guess which of several fields is the cause.
- * The returned array is composed with advisory entries (a leftover pidfile) into the report's
+ * (`inspectRuntime` appends the P0-5 location problems to the array this returns — see
+ * {@link dataLocationPrerequisiteProblems} — so this function stays the description of the four
+ * installation prerequisites while the caller decides what else can block a start.) The returned
+ * array is composed with advisory entries (a leftover pidfile) into the report's
  * `problems`, so `problems` may be non-empty while `ready` is true — never infer readiness from
  * `problems.length`. `runtimePackage.error` stays as the detail layer.
  *
@@ -236,21 +293,30 @@ export function inspectRuntime(env: NodeJS.ProcessEnv = process.env): Record<str
   const nodeSupported = satisfiesNodeRange(nodeVersion, SUPPORTED_NODE_RANGE);
   const npm = findNpmCli(env);
   const runtimePackage = runtimePackageReport(env);
-  const dataDirectory = dataDirectoryReport(env);
+  // P0-5 (N-R5-1) is evaluated *before* the writability probe, because the probe is the one write
+  // this surface may perform: an unsafe location must be reported, not touched. One evaluation, so
+  // the probe decision and the `problems` entry can never disagree.
+  const locationProblems = dataLocationPrerequisiteProblems(resolveDataDirectoryInfo(env).path);
+  const dataDirectory = dataDirectoryReport(env, locationProblems);
   const deprecatedEnv = DEPRECATED_ENV_VARS.filter((name) => (env[name]?.trim() ?? "") !== "");
   // R3-1: the contract verdict is derived from the *resolved* harness version (the version the
   // configured package spec points at), which is `null` only when the spec itself is unusable.
   const contract = classifyContract(runtimePackage.version);
   // The four prerequisites decide `ready` (ADR-0003 D3/D-a); they are never widened. The contract
   // verdict joins them through `contractBlocksReadiness`, so `compatible`/`unknown` cannot move it.
-  const prerequisites = prerequisiteProblems(env, {
-    nodeVersion,
-    nodeSupported,
-    npmFound: npm !== null,
-    dataDirectory,
-    runtimePackage,
-    contract,
-  });
+  // N-R5-1 adds a *safety* prerequisite to the same list: an unsafe data location (P0-5, alias-aware)
+  // is one the runner will refuse, so a pre-flight that ignored it would contradict the runner.
+  const prerequisites = [
+    ...prerequisiteProblems(env, {
+      nodeVersion,
+      nodeSupported,
+      npmFound: npm !== null,
+      dataDirectory,
+      runtimePackage,
+      contract,
+    }),
+    ...locationProblems,
+  ];
   // Orphaned services are an *advisory*: they are actionable, but a leftover pidfile must not
   // make an otherwise runnable installation report itself as not ready.
   const orphans = orphanReport(dataDirectory.path);
@@ -258,8 +324,9 @@ export function inspectRuntime(env: NodeJS.ProcessEnv = process.env): Record<str
   const problems = orphanHint === null ? prerequisites : [...prerequisites, orphanHint];
 
   return {
-    // Four-term composition (ADR-0003 裁决 D3 + D-a): engines, npm CLI, a data directory that is
-    // not *known to be* unwritable, and a parseable package spec. `unknown` (no directory yet)
+    // Five-term composition (ADR-0003 裁决 D3 + D-a, plus N-R5-1): engines, npm CLI, a data
+    // directory that is not *known to be* unwritable, a parseable package spec, and a data location
+    // the runner will not refuse (P0-5, alias-aware). `unknown` (no directory yet)
     // does not fail `ready`; deriving it from `problems` keeps the two from ever drifting.
     ready: prerequisites.length === 0,
     problems,

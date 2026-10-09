@@ -83,6 +83,30 @@ export const REQUIRED_SCRIPT_GATES = {
 /** Import specifiers that a self-contained bundle must not contain. */
 const BUILTIN_PREFIX = "node:";
 
+/**
+ * R5-2: npm runs these hooks for the **root** package during `npm ci`/`npm install`, so a
+ * publication hidden in one of them would execute in every CI job. They must not exist at all —
+ * there is no allowlist for them, by design.
+ */
+export const CI_LIFECYCLE_HOOKS = ["preinstall", "install", "postinstall", "prepare"];
+/**
+ * Hooks npm runs only for `npm pack`/`npm publish`. They may exist, but **only with exactly the
+ * reviewed command below**: the value is part of the gate, so a hook cannot be repurposed into
+ * running something else (a publish script, a network fetch, a code generator).
+ */
+export const ALLOWED_LIFECYCLE_HOOKS = {
+  prepack: {
+    command: "npm run check",
+    reason: "verifies the build before a tarball is produced; `npm ci` never runs it",
+  },
+  prepublishOnly: {
+    command: "npm run check",
+    reason: "last gate before a registry upload would happen; `npm ci` never runs it",
+  },
+};
+/** Hooks that only `npm pack`/`npm publish` reach (and which `npm ci` must not be able to use). */
+export const PUBLICATION_LIFECYCLE_HOOKS = ["prepack", "prepublish", "prepublishOnly"];
+
 /** Computes the lowercase hex sha256 of a UTF-8 string. */
 export function sha256(text) {
   return createHash("sha256").update(text, "utf8").digest("hex");
@@ -439,6 +463,55 @@ export function evaluateMetadata(snapshot) {
           "script-gate-missing",
           "package.json",
           `script "${script}" must invoke ${needle} (prepack/check must not bypass the metadata gate)`,
+        ),
+      );
+    }
+  }
+
+  // R5-2: the lifecycle-hook surface. `npm ci` executes the root package's install-lifetime
+  // hooks, which makes `prepare`/`postinstall` a first-class place to hide a publication; the
+  // publication-lifetime hooks are tolerated only with the exact reviewed command, so even they
+  // cannot be repurposed. Every message names the offending script.
+  for (const [hook, value] of Object.entries(scripts)) {
+    if (CI_LIFECYCLE_HOOKS.includes(hook)) {
+      findings.push(
+        finding(
+          "lifecycle-hook",
+          "package.json",
+          `script "${hook}" must not exist: npm ci runs it for the root package in every job, so a publication (or any side effect) could hide there`,
+        ),
+      );
+      continue;
+    }
+    if (!PUBLICATION_LIFECYCLE_HOOKS.includes(hook)) continue;
+    const allowed = ALLOWED_LIFECYCLE_HOOKS[hook];
+    if (allowed === undefined) {
+      findings.push(
+        finding(
+          "lifecycle-hook",
+          "package.json",
+          `script "${hook}" must not exist: npm runs it on pack/publish and it is not in ALLOWED_LIFECYCLE_HOOKS`,
+        ),
+      );
+      continue;
+    }
+    if (value !== allowed.command) {
+      findings.push(
+        finding(
+          "lifecycle-hook-drift",
+          "package.json",
+          `script "${hook}" is ${JSON.stringify(value)}, but the reviewed value is ${JSON.stringify(allowed.command)} (${allowed.reason})`,
+        ),
+      );
+    }
+  }
+  for (const hook of Object.keys(ALLOWED_LIFECYCLE_HOOKS)) {
+    if (typeof scripts[hook] !== "string") {
+      findings.push(
+        finding(
+          "lifecycle-allowlist-stale",
+          "package.json",
+          `ALLOWED_LIFECYCLE_HOOKS still lists "${hook}", but the script no longer exists; remove the allowlist entry`,
         ),
       );
     }

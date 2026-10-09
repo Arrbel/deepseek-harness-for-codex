@@ -7,9 +7,24 @@
 
 | 事项 | 答复 | 我的执行 |
 |---|---|---|
-| ① 推送与发布 | **先只推 Git，发布留待单独决定** | 推 `main` 与全部 tag 到 `origin`；**不执行 `npm publish`** |
+| ① 推送与发布 | **先只推 Git，发布留待单独决定** | 推 `main` 与全部 tag 到 `origin`；**不执行 `npm publish`**——**推送被拒，见下** |
 | ② `plugins/**` 是否入库 | **保持现状：不入库** | 零改动（`.gitignore` 不动） |
 | ③ `deepseek-harness-relay-mcp` | **删除以清空工作区** | 删除前核对解析后的绝对路径与内容归属，再删 |
+
+### 推送结果：**403，需要你处理凭据**（不是代码问题）
+
+```
+remote: Permission to Seann0824/deepseek-harness-for-codex.git denied to Arrbel.
+fatal: unable to access 'https://github.com/Seann0824/deepseek-harness-for-codex.git/': The requested URL returned error: 403
+```
+
+`main` 与 tags 两次推送都是同一个原因：本机缓存的凭据属于 **`Arrbel`**，而仓库属于 **`Seann0824`**，所以只有**读**权限。提交与 tag 都在本地（`git log origin/main..HEAD` = 4 个提交，工作树干净），**没有任何东西被推到远端**。可选修法（都需要你的账号动作，我不会自行改动凭据）：
+
+1. 用仓库属主登录：`gh auth login`（选 `Seann0824`）或把 credential helper 换成该账号的 PAT；
+2. 或把 `Arrbel` 加为仓库 **collaborator**（需要写权限）后重试；
+3. 或在有权限的机器上执行 `git push origin main && git push origin --tags`。
+
+推送前请自行核对：`git log --oneline origin/main..HEAD`（应为 4 个提交）与 `git tag`（应为 `v0.4.0`…`v0.4.3`）。
 
 > 答复之后，本节以下的"选项/建议"文字保留为**决策依据的历史记录**（解释当时为什么这样问、代价分别是什么），不再表示待决状态。
 

@@ -280,6 +280,12 @@ function parseMapping(lines: Line[], start: number, indent: number): { value: Ya
     const pair = splitKeyValue(line.text);
     if (pair === null) throw new YamlError(`expected "key: value", found ${JSON.stringify(line.text)}`, line.number);
     const { key, rest } = pair;
+    if (Object.hasOwn(mapping, key)) {
+      // Fail loud instead of letting the last duplicate win: GitHub rejects duplicate keys, and a
+      // silent overwrite is exactly how a hidden `run:`/`uses:` could be masked from the
+      // structural publish-surface assertions.
+      throw new YamlError(`duplicate key ${JSON.stringify(key)} at this level`, line.number);
+    }
     if (rest === "") {
       const nextIndex = skipBlanks(lines, index + 1);
       const next = lines[nextIndex];

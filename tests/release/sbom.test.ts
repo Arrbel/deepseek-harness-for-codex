@@ -10,13 +10,24 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { resolveNpmCli } from "../../src/service/npm-cli.js";
+import { validateDocument } from "../../scripts/sbom.mjs";
 import "../support/isolation.js";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+// npm derives the root component name from the checkout directory, so a renamed clone is
+// legitimate (verified: dir=zzz-not-the-package-name with package.json name=my-pkg yields
+// component.name=zzz-not-the-package-name, component.version=1.2.3); validateDocument is the
+// single rule this suite and the script share.
+const directoryName = basename(repoRoot);
+
+function expectDescribesThisPackage(document: CycloneDocument): void {
+  expect(validateDocument(document, { manifest, directoryName })).toEqual([]);
+  expect(document.metadata.component.version).toBe(manifest.version);
+}
 const scriptPath = join(repoRoot, "scripts", "sbom.mjs");
 const fixture = (name: string): string => join(repoRoot, "tests", "release", "fixtures", name);
 const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
@@ -66,13 +77,12 @@ describe("npm run sbom (scripts/sbom.mjs)", () => {
     const document = JSON.parse(result.stdout) as CycloneDocument;
     expect(document.bomFormat).toBe("CycloneDX");
     expect(document.specVersion).toBe("1.5");
-    expect(document.metadata.component.name).toBe(manifest.name);
-    expect(document.metadata.component.version).toBe(manifest.version);
+    expectDescribesThisPackage(document);
     expect(Array.isArray(document.components)).toBe(true);
     // Human-readable output must not pollute stdout: the redirect is the documented usage.
     expect(result.stdout.trimStart().startsWith("{")).toBe(true);
     expect(result.stderr).toContain("[sbom] cyclonedx 1.5:");
-    expect(result.stderr).toContain(`root ${manifest.name}@${manifest.version}`);
+    expect(result.stderr).toContain(`root ${document.metadata.component.name}@${manifest.version}`);
   });
 
   it("is reproducible apart from npm's serial number and timestamp", { timeout: 60_000 }, () => {
@@ -98,8 +108,28 @@ describe("npm run sbom (scripts/sbom.mjs)", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("[sbom] wrote ");
     const document = JSON.parse(readFileSync(target, "utf8")) as CycloneDocument;
-    expect(document.metadata.component.name).toBe(manifest.name);
-    expect(document.metadata.component.version).toBe(manifest.version);
+    expectDescribesThisPackage(document);
+  });
+
+  it("accepts the checkout directory name as the root component name (npm derives it that way)", () => {
+    // Regression pin for the R5-2 experiment's finding: `npm sbom` names the root component after
+    // the *directory*, so the strict "must equal package.json#name" rule rejected every renamed
+    // checkout (verified: dir=zzz-not-the-package-name, package.json name=my-pkg).
+    const shape = { name: "deepseek-harness-for-codex", version: "0.4.0" };
+    const document = {
+      bomFormat: "CycloneDX",
+      specVersion: "1.5",
+      metadata: { component: { name: "some-fork-dir", version: "0.4.0" } },
+      components: [],
+    };
+
+    expect(validateDocument(document, { manifest: shape, directoryName: "some-fork-dir" })).toEqual([]);
+    expect(validateDocument(document, { manifest: shape, directoryName: "deepseek-harness-for-codex" }))
+      .toEqual([expect.stringContaining('metadata.component.name is "some-fork-dir"')]);
+    expect(validateDocument(document, { manifest: shape, directoryName: "some-fork-dir", format: "spdx" })).toEqual([]);
+    expect(validateDocument({ ...document, metadata: { component: { name: "some-fork-dir", version: "9.9.9" } } }, { manifest: shape, directoryName: "some-fork-dir" }))
+      .toEqual([expect.stringContaining('expected "0.4.0"')]);
+    expect(validateDocument({ bomFormat: "SPDX" }, { manifest: shape, directoryName: "some-fork-dir" })).not.toEqual([]);
   });
 
   it("reports an empty production surface for --omit dev (dependencies is empty)", { timeout: 60_000 }, () => {
@@ -113,7 +143,6 @@ describe("npm run sbom (scripts/sbom.mjs)", () => {
     expect(result.status, result.stderr.slice(-500)).toBe(0);
     const document = JSON.parse(result.stdout) as CycloneDocument;
     expect(document.components).toEqual([]);
-    expect(document.metadata.component.name).toBe(manifest.name);
     expect(result.stderr).toContain("production scope: 0");
   });
 

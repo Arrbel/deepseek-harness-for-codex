@@ -24,6 +24,7 @@
 //   FIXTURE_PROJECTIONS        null -> session/projections always answers null
 //   FIXTURE_DELAY_MS           delay before the turn settles (default 40)
 //   FIXTURE_TURN_END           on (default) | skip (stop running without a terminal turn/end)
+//   FIXTURE_TURN_HOLD          1 -> keep the turn running until POST /__fixture/release
 //   FIXTURE_UNAUTHORIZED       off (default) | once | after-prompt (reject /api with HTTP 401)
 //   FIXTURE_EXIT_AFTER_MS      exit the fixture process this many ms after it starts serving
 //   FIXTURE_MODE               serve (default) | crash-with-token | crash-silent
@@ -42,6 +43,7 @@ const RECORDED = env.FIXTURE_RECORDED;
 const RECORDED_SPLIT = Number.parseInt(env.FIXTURE_RECORDED_SPLIT ?? "1", 10);
 const TURN_END = env.FIXTURE_TURN_END ?? "on";
 const UNAUTHORIZED = env.FIXTURE_UNAUTHORIZED ?? "off";
+const TURN_HOLD = flag("FIXTURE_TURN_HOLD");
 
 function flag(name) {
   return env[name] === "1" || env[name] === "true";
@@ -155,6 +157,26 @@ function settle(session, task) {
   session.settled = true;
 }
 
+// --- explicit turn release (FIXTURE_TURN_HOLD) ------------------------------------------------
+//
+// With the hold on, a prompted turn stays `running` until the test POSTs `/__fixture/release`.
+//
+// Why this exists: a test that wants to observe a *live* turn must not have to win a race against
+// the machine's load. With the default 40 ms settle, a loaded full-suite run lengthens the
+// orchestrator's own round trip enough that `turn/end` lands inside the very first observation
+// window, and `start()` (which ends in a refresh) reports the terminal status — the product
+// behaving correctly, the test assuming otherwise. A hold makes the observation deterministic:
+// no timer runs at all until the test asks for the turn to finish.
+const heldSessions = new Map();
+
+/** Settles every held, still-unsettled turn; returns how many were released. */
+function releaseHeldSessions() {
+  const pending = [...heldSessions.entries()].filter(([session]) => !session.settled);
+  heldSessions.clear();
+  for (const [session, task] of pending) settle(session, task);
+  return pending.length;
+}
+
 const server = createServer((request, response) => {
   const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
   if (request.method === "GET") {
@@ -193,6 +215,15 @@ const server = createServer((request, response) => {
   request.setEncoding("utf8");
   request.on("data", (chunk) => { body += chunk; });
   request.on("end", () => {
+    // Test control, like `/__fixture/stats`: no cookie, no envelope, and never gated by
+    // `FIXTURE_UNAUTHORIZED` — a control route that can be broken by the scenario under test
+    // would be useless.
+    if (requestUrl.pathname === "/__fixture/release") {
+      const released = releaseHeldSessions();
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ released }));
+      return;
+    }
     // Credential-loss scenarios: `once` breaks exactly one call (the client must re-exchange the
     // launch URL and retry), `after-prompt` breaks every call from the first refresh on (the
     // retry also fails, so the run must settle as failed(auth) instead of hanging).
@@ -264,7 +295,13 @@ const server = createServer((request, response) => {
           turn, step: 1, source: "user",
           message: { role: "user", content: [{ type: "text", text: session.task }] },
         });
-        setTimeout(() => settle(session, session.task), Number.parseInt(env.FIXTURE_DELAY_MS ?? "40", 10));
+        if (TURN_HOLD) {
+          // Registered synchronously, before the acceptance is even written: by the time the
+          // orchestrator can observe the session, the hold is already in force.
+          heldSessions.set(session, session.task);
+        } else {
+          setTimeout(() => settle(session, session.task), Number.parseInt(env.FIXTURE_DELAY_MS ?? "40", 10));
+        }
         envelope = ok(rpcId, { accepted: true });
       }
     } else if (method === "session/list") {

@@ -2,12 +2,22 @@
 //
 // The release workflow cannot be executed locally, so its *structure* is what the suite can
 // hold to account: which triggers it has, which permissions each job effectively runs with,
-// and — the point of R4-1 — whether any step in any job performs a publishing action. Every
-// query below returns findings with the job/step that produced them, so a failure message names
-// the offending step instead of just "the file changed".
+// and whether a step performs a publishing action. Every query below returns findings with the
+// job/step that produced them, so a failure message names the offending step instead of just
+// "the file changed".
+//
+// **What this module can and cannot see (R5-3)**: the command matching here is a *static text
+// scan* that tolerates flags between the manager and the subcommand (`npm --prefix . publish`),
+// quote concatenation (`npm p''ublish`), `npm.cmd`, and direct registry HTTP — but it cannot see
+// dynamically built commands (`node -e`, `bash -c "$CMD"`, base64), a publish performed by a
+// third-party action whose name does not contain "publish", credentials injected from outside
+// the tree, install scripts of third-party dependencies, or a publish run by hand. The full,
+// authoritative list lives in the module header of `./publish-surface.ts` (which owns the
+// patterns) and in `reports/r5-publish-surface.md`; keep the three in sync.
 
 import { readFileSync } from "node:fs";
 import { asMapping, asSequence, asString, parseYaml, type YamlMapping, type YamlValue } from "./yaml.js";
+import { findPublishCommands, findRegistryCredentials } from "./publish-surface.js";
 
 /** One workflow step, flattened with its owning job. */
 export interface WorkflowStep {
@@ -52,10 +62,9 @@ export interface WorkflowFinding {
   readonly reason: string;
 }
 
-/** Registry publication commands, in any of the three package managers plus npm's staging flow. */
-const PUBLISH_COMMAND = /(^|[\s;&|()])(npm|yarn|pnpm)\s+(publish|stage\s+publish)\b/u;
-/** The flag npm requires to attach provenance to a *publication*. */
-const PUBLISH_PROVENANCE_FLAG = /--provenance\b/u;
+// Command/credential patterns live in `./publish-surface.ts` so the workflow-level and
+// repository-level scans cannot drift apart (R5-3 replaced the stricter local regex that missed
+// `npm --prefix . publish`). Only the two key-shaped checks remain here.
 /** Actions that upload a package to a registry. */
 const PUBLISH_ACTION = /publish/u;
 /** Registry authentication wiring: the token a publication needs. */
@@ -152,13 +161,18 @@ export function effectivePermissions(workflow: Workflow, job: WorkflowJob): Yaml
   return Object.keys(job.permissions).length > 0 ? job.permissions : workflow.permissions;
 }
 
-/** Every step that would publish a package to a registry, or attach publish-provenance. */
+/**
+ * Every step that reaches a registry: a registry-mutating command in `run:` (with the tolerant
+ * patterns described in the module header) or a publishing action in `uses:`.
+ */
 export function findPublishActions(workflow: Workflow): WorkflowFinding[] {
   const findings: WorkflowFinding[] = [];
   for (const step of allSteps(workflow)) {
     if (step.run !== null) {
-      if (PUBLISH_COMMAND.test(step.run)) findings.push({ job: step.job, step: step.label, reason: "run: a registry publish command" });
-      if (PUBLISH_PROVENANCE_FLAG.test(step.run)) findings.push({ job: step.job, step: step.label, reason: "run: --provenance (publish flag)" });
+      for (const finding of findPublishCommands(step.run, step.label)) {
+        if (finding.kind !== "publish") continue;
+        findings.push({ job: step.job, step: step.label, reason: finding.reason });
+      }
     }
     if (step.uses !== null && PUBLISH_ACTION.test(step.uses)) {
       findings.push({ job: step.job, step: step.label, reason: `uses: ${step.uses} looks like a publishing action` });
@@ -167,7 +181,10 @@ export function findPublishActions(workflow: Workflow): WorkflowFinding[] {
   return findings;
 }
 
-/** Every place a registry credential or endpoint is wired in, which a publish would require. */
+/**
+ * Every place a registry credential or endpoint is wired in, which a publish would require:
+ * `with`/`env` keys and values, and credential shapes in the `run:` text.
+ */
 export function findRegistryAuthWiring(workflow: Workflow): WorkflowFinding[] {
   const findings: WorkflowFinding[] = [];
   for (const step of allSteps(workflow)) {
@@ -181,9 +198,16 @@ export function findRegistryAuthWiring(workflow: Workflow): WorkflowFinding[] {
         findings.push({ job: step.job, step: step.label, reason: `env.${key} is a registry token` });
       }
     }
-    const script = step.run ?? "";
-    if (/NODE_AUTH_TOKEN|NPM_TOKEN|npm\s+login|npm\s+token\b/u.test(script)) {
-      findings.push({ job: step.job, step: step.label, reason: "run: authenticates against a registry" });
+    for (const [key, value] of [...Object.entries(step.with), ...Object.entries(step.env)]) {
+      if (typeof value !== "string") continue;
+      for (const finding of findRegistryCredentials(value, `with/env.${key}`)) {
+        findings.push({ job: step.job, step: step.label, reason: `${key}: ${finding.reason}` });
+      }
+    }
+    if (step.run !== null) {
+      for (const finding of findRegistryCredentials(step.run, step.label)) {
+        findings.push({ job: step.job, step: step.label, reason: finding.reason });
+      }
     }
   }
   return findings;
@@ -225,16 +249,21 @@ export function collectStrings(value: YamlValue, prefix = ""): LocatedString[] {
   ]);
 }
 
-/** Anything in the whole document (keys and values alike) that could publish or authenticate. */
+/**
+ * Anything in the whole document (keys and values alike) that could publish or authenticate,
+ * using the same tolerant command patterns as the step-level scan (`./publish-surface.ts`).
+ */
 export function findSuspiciousStrings(workflow: Workflow): (LocatedString & { reason: string })[] {
   const findings: (LocatedString & { reason: string })[] = [];
   for (const { path, value } of collectStrings(workflow.document)) {
-    if (PUBLISH_COMMAND.test(value)) findings.push({ path, value, reason: "looks like a registry publish command" });
-    if (PUBLISH_PROVENANCE_FLAG.test(value)) findings.push({ path, value, reason: "--provenance is a publish flag" });
+    for (const finding of findPublishCommands(value, path)) {
+      findings.push({ path, value, reason: finding.reason });
+    }
+    for (const finding of findRegistryCredentials(value, path)) {
+      findings.push({ path, value, reason: finding.reason });
+    }
     if (/registry(-?url)?$/iu.test(path)) findings.push({ path, value, reason: "configures a registry endpoint" });
     if (REGISTRY_AUTH_ENV.test(value)) findings.push({ path, value, reason: "names a registry token" });
-    if (/secrets\.[A-Za-z0-9_]+/u.test(value)) findings.push({ path, value, reason: "reads a repository secret" });
-    if (/\bnpm\s+(login|token|adduser)\b/u.test(value)) findings.push({ path, value, reason: "authenticates against a registry" });
     if (/\.uses$/u.test(path) && PUBLISH_ACTION.test(value)) {
       findings.push({ path, value, reason: "references an action that publishes" });
     }

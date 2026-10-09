@@ -124,6 +124,7 @@ codex plugin add deepseek-harness@deepseek-harness-for-codex
 5. **打包与第二条安装路径**：`npm pack` 出 tarball → 在临时目录 `npm install <tarball>` → 用包内 `.mcp.json` 的语义（`node ./dist/bin.mjs`，cwd 指向包根）启动，断言 10 个工具与 `serverInfo.version` 等于 `package.json` 版本。这是"从 registry 安装"在不发布前提下的等价验证；**registry 本身未被覆盖**，该缺口必须在验收报告里写明。
 6. **本地路径**：`npm run prepare:plugin` 后按 §1 在 Codex 里以本地路径加载，确认 `doctor` 版本一致、10 个工具可见。
 7. **卫生**：`git status` 只含预期改动；`plugins/**` 不在索引（生成物）；无真实凭据出现在 fixture/日志；跑完确认用户真实数据目录与 `~/.dsh` 未被改动。
+8. **以 shipped bundle 为对象的复核，必须先 `npm run build`**：`dist/` 是构建产物，用旧 `dist` 验证新源码会量到**旧行为**（真实发生过：一次"探针不再写"的复核因为 `dist` 比 `src` 旧而得到**假阴性**，见 `reports/verify-r6.md` 的 N-R6-2）。请同时记录 `dist` 与被测 `src` 的 mtime，或直接以源码路径验证。
 8. **留档**：验收报告写入 `E:\AI\test\reports\`（本仓库不跟踪 `reports/`），并附原始命令与输出。
 
 ## 6. 数据与隐私

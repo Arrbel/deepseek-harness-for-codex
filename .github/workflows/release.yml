@@ -52,7 +52,10 @@ jobs:
           cache: npm
 
       - name: Install from the lockfile
-        run: npm ci
+        # `--ignore-scripts` (R5-2): this job has `id-token: write`, so an install lifecycle hook
+        # is the most valuable thing an attacker could put in this repository. No install hook is
+        # needed — see reports/r5-publish-surface.md.
+        run: npm ci --ignore-scripts
 
       - name: Run the hermetic gate (typecheck, tests, metadata, build, self-contained probe)
         run: npm run check
