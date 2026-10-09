@@ -28,6 +28,22 @@
 
 系统化改造的进度以 `docs/roadmap.md` 为准；架构约束见 `docs/architecture.md`。
 
+### Added（Wave R4：发布工程、跨平台证据与进度可见性）
+
+- **`release.yml`（tag 触发）+ `npm run sbom`**：`push.tags: v*` → `npm ci` → `npm run check` → `npm pack` → SBOM（CycloneDX）→ 上传 `npm-tarball`/`sbom-cyclonedx` → `attest-build-provenance`。**流水线里没有任何发布动作**，而且这不是靠注释保证的：仓库不允许新增 YAML 依赖，于是新增了一个**只读的子集解析器**把 workflow 解析成 `{jobs:[{steps}]}` 模型，17 条不变量覆盖"每个 `run`/`uses`/`with`/`env` 都不含发布面"、触发条件只能是 tag、有效权限必须含 `id-token`/`attestations`、两个 artifact 都上传、`npm pack` 产物面 == `package.json#files`。`npm run sbom` 与 CI 同一套参数：生产依赖面 **0 个组件**（`dependencies` 为空），除 `serialNumber`/`timestamp` 外逐字节确定。
+- **`RunSnapshot.progress`（第 18 个键）与自适应轮询**：`{started, finished, current:{turn,step,seq}|null}`——**只含数字**的进度投影，来自已录制实证的 `step/start`。**刻意不含工具名/参数/命令/输出**：录制里 `step/start` 的 data 只有 `{turn, step}` 与 schema 强制的 `seq`，工具名**无证据**，因此**不投影**（宁可少显示，也不猜字段，更不让参数文本进入快照或日志）。轮询在有进展时 400ms → **150ms**、静默退回 400ms，策略是**纯函数且有界**（最坏 ≈7 轮/秒；实测：3 秒静默回合带退避约 9 次 `session/page`，去掉退避为 20 次）。
+- **跨平台证据包**（`tests/platform/**`）：把全部平台条件分支逐条清点（含行号、"本机是否执行"、"另一侧有无测试"），并为"另一侧"补**行为级**模拟证据（POSIX 终止走进程组而非 `taskkill`、mac 的 `open` 拿到正确 URL、路径分隔符按平台生成），同时如实列出**从未在真实 ubuntu/mac 上执行过**的条目。
+
+### Fixed（Wave R4）
+
+- **P0-5 护栏的 macOS 绕过（安全；红线文件）**：路径比较原先**只在 `win32`** 折叠大小写，而 macOS 默认 APFS 大小写不敏感——`DSH_MCP_DATA_DIR=/Users/Bob`（home 为 `/Users/bob`）可以绕过"数据目录不得指向用户 home"的护栏，重演本会话修过的"写脏用户真实 home"那类事故。现在只有一个助手 `foldForComparison(value, platform, policy)`，并**刻意做成非对称**：
+  - `"filesystem"`（`win32` + `darwin`）用于**保护性**比较——**匹配越多 = 拒绝越多**（护栏、workspace 白名单、`dataLocationProblems`）；
+  - `"win32-only"` 用于**不可逆动作**的比较——`identityOwnsRecord` 成立会**真的 signal 进程**、prune 的 blocker 判定会影响**真的删目录**，折叠在这里等于放宽，故保持平台原生语义。
+
+  **原则（可引用）**：折叠只用在"匹配越多 = 拒绝越多"的保护性比较上；凡"匹配越多 = 动作越多（杀/删）"的比较，一律保持平台原生大小写语义。linux 保持大小写敏感（未变），Windows 逐字等价。
+  **已知残余（已登记，不粉饰）**：这道护栏比较的是**路径拼写**，**不解析 `realpath`**（工作区护栏会解析，数据目录护栏不会）。因此一个**指向 home 的符号链接/junction** 作为 `DSH_MCP_DATA_DIR` 时仍会被接受——独立验证（`reports/verify-r4-adversarial.md` A-1）与终验（`reports/verify-r4.md` N-R4-1）都复现了这一点。它需要主动构造别名，且能设置该变量者本就能直接写 home，故不作为阻断；**修法已登记为 `docs/roadmap.md` 的 Wave R5-1**（存在时比较 `realpath`、不存在时取最近存在祖先，并让两道护栏的 realpath 语义一致）。
+- **三处会让 CI 的 ubuntu/macOS 列必然变红的测试硬编码**：`tests/config/resolve.test.ts`（硬编码 `;`，而实现用 `path.delimiter`）、`tests/unit/layering.test.ts`（宿主分支断言）、`tests/diagnostics/doctor-doc.test.ts`（`C:\one` 在 POSIX 上同时含盘符冒号与列表分隔符）。`tests/unit/data-location.test.ts` 也从"宿主绑定 + 在 POSIX 上退化为空转"改成**显式平台**断言。
+
 ### Added（Wave R3：韧性、可恢复性与并发）
 
 - **`doctor.contract`（第 20 个顶层字段）与契约版本矩阵**：wire 适配按 **DSH 版本线**声明（`src/dsh/matrix.ts` 的 `CONTRACT_MATRIX`，只有 baseline 带完整形状，其余行只记差异），录制夹具按版本线分档（`tests/fixtures/recorded/<dshLine>/` + `current.json` 指针，**只有一份录制集**）。`status` 四态：`exact`/`compatible`/`unknown`（尚未安装——**正常状态**）/`unsupported`。纪律：**只有 `unsupported` 会影响 `problems`/`ready`**，由唯一判据 `contractBlocksReadiness` 决定，`unknown` 刻意不算失败（否则每个全新安装都会显示不可用）。

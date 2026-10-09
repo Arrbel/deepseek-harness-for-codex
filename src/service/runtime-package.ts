@@ -28,6 +28,7 @@ import {
   type RuntimePackageFailureKind,
 } from "../policy/package-spec.js";
 import { identityOwnsRecord, orphanState, parsePidFile, pidFilePath, type PidFileRecord } from "../policy/orphans.js";
+import { foldForComparison } from "../policy/paths.js";
 import { isProcessAlive, readProcessIdentity } from "./process-tree.js";
 import { resolvePruneVersionsEnabled } from "../config/resolve.js";
 import { tail as tailShared } from "../util/errors.js";
@@ -792,10 +793,19 @@ function formatMegabytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Windows paths are case-insensitive, so equal directories can be spelled two ways. */
+/**
+ * Comparison form of a path recorded in a pidfile.
+ *
+ * **`"win32-only"` folding is deliberate** (task-35 §3): these comparisons decide the
+ * `pidfile-foreign` / `pidfile-binpath-mismatch` blockers, and *any* blocker makes
+ * `planVersionPrune` skip **every** version directory (`runtime-package.ts:705`). Folding on macOS
+ * would therefore open that global fail-closed gate for an extra case — i.e. it would **delete
+ * more**, the direction that is not automatically safe. macOS keeps today's verdict until the
+ * change is reviewed; `policy/paths.ts` holds the single folding rule for both directions.
+ */
 function canonicalPath(value: string, platform: NodeJS.Platform): string {
   const slashed = normalize(value).replaceAll("\\", "/");
-  return platform === "win32" ? slashed.toLowerCase() : slashed;
+  return foldForComparison(slashed, platform, "win32-only");
 }
 
 function errorCode(error: unknown): string | null {

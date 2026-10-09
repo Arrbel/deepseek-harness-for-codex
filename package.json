@@ -45,6 +45,7 @@
     "check": "npm run typecheck && npm run test && npm run check-metadata && npm run build && node scripts/check-metadata.mjs --self-contained",
     "check:live": "node scripts/check-live-guard.mjs && vitest run tests/e2e/live.test.ts --reporter=verbose",
     "dsh:try": "node scripts/dsh-try.mjs",
+    "sbom": "node scripts/sbom.mjs",
     "prepare:plugin": "npm run version:sync && npm run check",
     "prepack": "npm run check",
     "release:check": "npm run check && npm pack --dry-run",

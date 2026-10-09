@@ -14,7 +14,7 @@ import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { optionalSessionId, requireTask } from "../policy/trusted-input.js";
 import { resolveWorkspace } from "../policy/workspace.js";
-import { lastTurnEndOutcome, projectAssistantText } from "../dsh/events.js";
+import { lastTurnEndOutcome, projectAssistantText, projectStepProgress } from "../dsh/events.js";
 import { classifyThrownFailure, type ClassifiedWireFailure } from "../dsh/wire.js";
 import { samePath } from "../policy/paths.js";
 import type { HistoryEvent, SessionSummary } from "../dsh/types.js";
@@ -24,6 +24,12 @@ import type { ServiceAccess, ServiceSupervisor } from "../service/supervisor.js"
 import { AdoptLock, type AdoptLease } from "./adopt-lock.js";
 import { admitRun, capacityVerdict, resolveRunLimit, type ActiveRun, type Occupancy, type RunAdmission } from "./concurrency.js";
 import { RunJournal, serviceHomesUnder, type JournalProblem, type JournalRecord } from "./journal.js";
+import {
+  INITIAL_POLL_STATE,
+  advancePollState,
+  nextPollDelayMs,
+  pollScheduleFor,
+} from "./polling.js";
 import {
   journalRecordAfterOutcome,
   journalRecordFor,
@@ -318,14 +324,28 @@ export class RunOrchestrator {
     return await this.refresh(this.registry.require(runId));
   }
 
-  /** Polls the Web session for up to 30 seconds. */
+  /**
+   * Polls the Web session for up to 30 seconds.
+   *
+   * The interval is adaptive (R3-5): a refresh that brought a new event shortens it to the
+   * schedule's floor, and silence walks it back up to the configured `pollIntervalMs`. The
+   * schedule is a pure function of the last observation (`run/polling.ts`), the ceiling is still
+   * the operator's configured pace, and the deadline is unchanged — acceleration can only make the
+   * loop poll sooner, never run longer. The final `Math.min` keeps the last sleep inside the
+   * remaining budget, so the method never overshoots by one interval.
+   */
   public async wait(runId: string, timeoutMs: number): Promise<RunSnapshot> {
     await this.reconcile();
     const run = this.registry.require(runId);
     const deadline = Date.now() + Math.min(Math.max(timeoutMs, 0), 30_000);
+    const schedule = pollScheduleFor(this.pollIntervalMs);
+    let state = INITIAL_POLL_STATE;
     let snapshot = await this.refresh(run);
+    let observedSeq = snapshot.lastEventSeq;
     while (snapshot.status === "running" && Date.now() < deadline) {
-      await delay(Math.min(this.pollIntervalMs, Math.max(1, deadline - Date.now())));
+      state = advancePollState(state, snapshot.lastEventSeq > observedSeq);
+      observedSeq = snapshot.lastEventSeq;
+      await delay(Math.min(nextPollDelayMs(state, schedule), Math.max(1, deadline - Date.now())));
       snapshot = await this.refresh(run);
     }
     return snapshot;
@@ -690,6 +710,9 @@ export class RunOrchestrator {
     const events: HistoryEvent[] = eventsResult.value;
     run.lastEventSeq = events.reduce((highest, entry) => Math.max(highest, entry.event.seq), run.lastEventSeq);
     run.assistantText = projectAssistantText(events);
+    // R3-5, additive: progress markers from the same window. Scalars copied from recorded fields
+    // only, so no payload text (and therefore no tool parameter) can reach a snapshot.
+    run.progress = projectStepProgress(events);
     // Durable progress marker: a later process resumes from here instead of replaying history.
     // Written only when the window actually carried events, so a 400 ms poll loop over a quiet
     // session does not rewrite the same record forever.

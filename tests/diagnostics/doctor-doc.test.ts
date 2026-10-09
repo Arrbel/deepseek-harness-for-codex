@@ -99,9 +99,13 @@ describe("doctor fields are the fields the README documents", () => {
     expect(report.allowedWorkspaceRoots).toEqual([]);
     const configured = inspectRuntime({
       DSH_MCP_DATA_DIR: scratch(),
-      DSH_MCP_WORKSPACE_ROOTS: ["C:\\one", "C:\\two"].join(delimiter),
+      // Platform-neutral roots: values joined with `path.delimiter` must not themselves contain
+      // that delimiter. `C:\one` does on POSIX (`:` is both the drive colon and the list
+      // separator), so the list would split into four entries and this test would be red on the
+      // ubuntu/macOS CI columns (found by task-35's audit).
+      DSH_MCP_WORKSPACE_ROOTS: ["/roots/one", "/roots/two"].join(delimiter),
     }) as unknown as { allowedWorkspaceRoots: string[] };
-    expect(configured.allowedWorkspaceRoots).toEqual(["C:\\one", "C:\\two"]);
+    expect(configured.allowedWorkspaceRoots).toEqual(["/roots/one", "/roots/two"]);
 
     expect(["yes", "no", "unknown"]).toContain(report.dataDirectory.writable);
     expect(typeof report.engines.supported).toBe("boolean");

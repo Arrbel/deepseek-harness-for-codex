@@ -177,6 +177,7 @@ codex mcp add deepseek-harness -- npx --yes --package=deepseek-harness-for-codex
 - 任何失败路径都会落到终态（含凭据失效、服务被杀、契约漂移）：不会出现"停在 `running` 只留一条 error"的运行。
 - `nextAction`：由 `reason` **单向派生**的下一步动作，闭集六值——`new-session`（换一个新会话重跑：`turn-blocked`，回合在任何 step 前被拒，`blocked` 什么都没产出，缩窄没有对象）、`retry-narrower`（把任务缩窄再试：`turn-truncated`，产出被 token 上限截断）、`restart-service`（重启服务再试：`service-unreachable` / `transport`）、`relogin`（重新 `start_service` 换凭据：`auth`）、`report-only`（只上报、不猜动作：`protocol-drift`、`turn-interrupted`，以及**全部开放形态** `rpc:<code>` / `turn-aborted:<cause>` / `turn-unknown:<kind>`）、`none`（`reason` 为空，即 `running` / `succeeded` / `cancelled`）。开放形态**一律** `report-only`：本项目不认识的失败原因不允许被猜成一个具体动作。`turn-interrupted` 同属"不猜"：它是 DSH 对已持久化日志的**崩溃恢复**（缺失的 step/end、turn/end 由合成事件补齐），恢复后会**继续使用同一个会话**，因此"旧会话不可用"不是我们验证过的事实。
 - `webUrlStale`：**仅**当 `failed(service-unreachable)` 时为 `true`。**服务重启后端口会重新分配、launch token 也会轮换，旧链接随即失效**——此时不要复用旧的 `webUrl`，请重新调用 `start_service` 取新链接。
+- `progress`：长回合里"正在做什么"的**只含数字**投影——`{started, finished, current}`，`current` 是 `{turn, step, seq}` 或 `null`。它刻意**不含**工具名、参数、命令或输出：工具名在录制证据里拿不到（`step/start` 的 data 只有 `{turn, step}`），所以本项目**不猜**这个字段；宁可少显示，也不让参数文本进入快照或日志。轮询间隔在有进展时降到 **150ms**、静默时退回 **400ms**（纯函数、有界：最坏 ≈7 轮/秒）。
 
 **默认权限模式需要人工审批**：默认 `DSH_PERMISSION_MODE=workspace-write` 会映射为 `approval: ask`（见 `packages/bundle/base/cordis.patch.yml`）——需要写文件/执行命令的动作会在 Harness 页面等你点批准，而 MCP 面**无法替你回答审批**。此时从 Codex 视角看它只是一个长时间 `running`。请在页面完成批准，或在受控环境显式使用 `DSH_PERMISSION_MODE=danger-full-access`。
 

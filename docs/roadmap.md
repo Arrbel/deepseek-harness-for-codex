@@ -71,6 +71,37 @@
 
 **R3 的原则**：可恢复性只能建立在**已有**的 fail-closed 语义之上——对账不得发明新终态、不得把"未知"写成"成功"、不得因为抢不到锁就替别人下结论。
 
+### Wave R5（P3 收尾：把 R4 对抗性复核的中等问题补上）
+
+来源：`reports/verify-r4-adversarial.md`（proto-verify 的**打假**报告）。总判定**无阻断项**，以下四项按发现顺序登记，**每条都带可执行的修法**：
+
+| 项 | 主题 | 严重度 | 出口判据 |
+|---|---|---|---|
+| R5-1 | **P0-5 的别名层缺口**：数据目录护栏只比较拼写、**不解析 realpath**，而工作区护栏**会**解析（`workspace.ts` / `orchestrator.ts` 用 realpath，`paths.ts` 明说不用）——已实测：指向 home 的 junction 能骗过护栏并**真的写进 home** | 中（设计缺口，非回归；能设该变量者本就能直接写 home） | 护栏在**路径存在时**额外比较 `realpath`（不存在时取**最近存在祖先**的 realpath），与 home/父目录/根比较沿用**保护性折叠**；用例含真实 junction/symlink 实验（临时目录内建、结束删净）；**两条护栏的 realpath 语义必须一致**（否则又是"两套规则"） |
+| R5-2 | **`npm ci` 的生命周期钩子面**：release/check/live-smoke 三处都是裸 `npm ci`，而 `npm ci` **会执行** root `preinstall/install/postinstall/prepare`；元数据门禁只要求指定脚本存在、**不禁新增**这些钩子 | 中 | 要么在 CI 里用 `--ignore-scripts` 并显式列出需要的脚本，要么**把"不得新增生命周期钩子"纳入门禁**（两者择一，需论证）；无论选哪条，报告里要写清"一个发布步骤还能从哪进来" |
+| R5-3 | **"绝不 publish"检测器的盲点**：`findPublishActions` 漏 `npm --prefix . publish`、`npm run <script>`、`node scripts/publish.mjs`、直连 registry 的 HTTP；且**不扫描** `package.json#scripts`、`.npmrc`、`scripts/**`；其 docstring 声称"任何步骤里夹带的发布都会在此失败"**强于代码能力** | 中 | 要么扩大检测面（含 `package.json#scripts`/`.npmrc`/`scripts/**` 与 `--prefix` 形态），要么**把 docstring 降到与能力相符**——**两者都必须做其中之一**，不允许"声称强于实现" |
+| R5-4 | **`journal.error` 未走 `redactSecrets`**，与 `drift.ts` 的逐字段脱敏纪律不一致 | 低 | 统一走脱敏；用例：把 token 形状塞进 error → 断言文件里不出现 |
+| R5-5 | **结构性批评（前瞻）**：折叠策略"按调用点选用"，而默认值是最宽的 `filesystem` → 将来破坏性调用点**忘传** `"win32-only"` 会静默扩大杀/删面，无结构性拦截 | 低 | 二选一：**取消默认值**（强制每个调用点显式声明意图）或**把默认值改成"act-less"**；无论哪种都要留下"新增调用点会被强制表态"的证据 |
+
+> **R5 的纪律**：R5-1 与 R5-5 都动**红线文件**（P0-5 语义 / 调用约定），因此 R5 必须**重新做一轮独立验证**（含真实 junction/symlink 绕过尝试），不得沿用 R4 的验收结论。
+
+### Wave R4（P3：发布工程、跨平台证据、进度可见性）
+
+| 项 | 主题 | 状态 | 任务 | 出口判据 |
+|---|---|---|---|---|
+| R4-1 | `release.yml`（tag 触发、构建 + SBOM + provenance、**零发布动作**）+ `npm run sbom` | ✅ | task-32（dist-ssot） | 结构不变量 17 条（自研只读 YAML 子集解析器，因不许新增依赖）：无任何发布动作（含注释/`with`/`env`）、触发只能是 tag、有效权限含 `id-token`+`attestations`、两个 artifact 都上传、pack 产物面 == `files`；**5 条反向验证**（加 publish 步 / 删 `attestations` / tag 换分支 / 删 SBOM 上传 / 加 `NODE_AUTH_TOKEN`）全部变红后逐字节还原；`npm run sbom` 本地真跑（生产依赖面 **0 组件**） |
+| R4-2 | npm 分发身份决策包 | ✅ 决策包 | Lead（`docs/plans/r4-decisions.md`） | 事实已核实：npm 上 `deepseek-harness-for-codex@0.3.1` 是**你自己的包**（repository 一致）；**用户裁定：先只推 Git，发布另议** |
+| R4-3 | 跨平台证据包（分支清点 + 行为级模拟 + 残余风险表） | ✅ | task-34（runtime-verify） | 12 个源文件的平台分支逐条清点（含行号）；"另一侧"补行为级模拟（`tests/platform/**` 33 例）；**5 条反向验证**；诚实列出 **8 条从未在真实 ubuntu/mac 上执行过**；§6 空转审查把两条"宿主绑定"用例改成真证明 |
+| R3-5 | 事件投影增强（`RunSnapshot.progress`）+ 自适应轮询 | ✅ | task-33（test-foundation） | **工具名因无证据而放弃**（录制里 `step/start` 的 data 只有 `{turn,step}`）并写明；投影只含数字、参数不可能进入（3 条测试 + 6 条反向验证，其中"投影带整窗"会打印出泄漏的完整工具目录）；轮询 150↔400ms 纯函数有界（≈7 轮/秒、≈14 RPC/秒，实测退避 9 vs 无退避 20 次 `session/page`）；`RunStatus`/`settle`/既有字段零语义变化、快照键集 17→18 |
+| — | **R4 期间修掉的两个真实缺陷**（由 R4-3 发现） | ✅ | task-35（launch-impl） | ① **P0-5 护栏的 macOS 绕过**（安全，红线文件）：折叠只在 win32 → 现在 `foldForComparison` 双 policy（保护性 `win32+darwin` / 不可逆 `win32-only`），原则见下；② **三处 CI 必红的平台硬编码** + `data-location` 空转改真证明 |
+
+> **Wave R4 收口**：Lead 串行 `version:sync`（`wrote 0`）+ `npm run check` **exit 0**（`Test Files 53 passed | 1 skipped (54)`、**`Tests 813 passed | 1 skipped (814)`**、四道门禁 OK）。终验 `reports/verify-r4.md` + 对抗性复核 `reports/verify-r4-adversarial.md`（专打 P0-5 绕过 / 发布旁路 / 投影泄漏）。
+
+**R4 的原则（可引用）**：**折叠只用在"匹配越多 = 拒绝越多"的保护性比较上；凡"匹配越多 = 动作越多（杀/删）"的比较，一律保持平台原生大小写语义。**（`identityOwnsRecord` 成立会真的 signal 进程、prune 的 blocker 会影响真的删目录——在这两处放宽匹配是**放宽**，不是收紧。）
+
+**R4 待用户决定的项（已在 `docs/plans/r4-decisions.md` 备好，用户已答复）**：① 分发身份与是否发布 → **先只推 Git，发布另议**；② 生成物 `plugins/**` 是否入库 → **保持不入库**；③ `deepseek-harness-relay-mcp` → **删除以清空工作区**。
+
+**Wave R4 残余风险（未验证项，逐条可核对）**：真实 ubuntu/macOS 列从未执行（`tests/platform/**` 是平台注入的**模拟**，不等于真实平台；含 mac 的 `pgrep -P`/`ps -o command=`/`open` 与 APFS 行为）；CI 的 provenance **真实签发**（需 OIDC，本地只能证明权限与调用形态）；`isWithin` 的折叠在本机**不具判别力**（经宿主 `path.win32.relative`，自带不敏感），只在 ubuntu/mac 上才判别；非默认的**大小写敏感 APFS** 卷上"同工作区复用服务"存在假阳性（默认取安全侧，如实记录）；跨进程并发额度仍未做（上限为每进程）。
 **R3 期间由覆盖率/属性测试暴露并修掉的真实缺陷**（这是本 Wave 最有价值的产出，全部由 Lead 收口并已随 R3 验证）：
 1. `classifyThrownFailure([Symbol("x")])` **抛异常**（`String([Symbol()])` 不 total）→ 新增永不抛的 `renderUnknown`；2. `message` 可为空串（违反字段文档"never empty"）→ 两处入口加非空兜底；3. `runtime-package.ts` 里与 `service/npm-cli.ts` **逐字节重复 34 行且全仓无人导入**的死代码 → 删除，只留一份实现。
 **R3 期间产生的裁定**：① 跨工作区对账**不加白名单**（否则崩溃的运行永远无人终结；安全性由"服务仍活则收养 + 持有者持锁则跳过"保证）；② `RunStatus` 不因并发而新增 `queued`（拒绝优先）；③ 上限为**每进程**，跨进程共享额度明确不做。

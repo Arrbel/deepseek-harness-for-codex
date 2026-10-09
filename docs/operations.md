@@ -59,7 +59,8 @@ codex plugin add deepseek-harness@deepseek-harness-for-codex
 | `nextAction` | **由 `reason` 单向派生**的建议动作（闭集 6 值，见下表）；非 `failed` 时为 `none`。它是**建议**：本服务只自动执行其中唯一安全的一种（`auth` 换 cookie 重试一次） |
 | `webUrlStale` | `true` 表示本次失败是 `service-unreachable`——**旧链接与旧 token 已失效**，恢复后必须重新 `start_service` 取新链接 |
 | `finishedAt` | 终态写入时间；`running` 时为 `null` |
-| 其余 | `runId`/`serviceId`/`sessionId`/`sessionReused`/`task`/`workspace`/`webUrl`/`startedAt`/`lastEventSeq`/`assistantText` |
+| `progress` | `{started, finished, current}`：**只含数字**的进度投影。`current` 为 `{turn, step, seq}` 或 `null`，来自**已录制实证**的 `step/start` 事件（`{turn, step}` + 每个 schema 都校验的 `seq`）。**刻意不包含**工具名/参数/命令/输出——录制夹具里 `step/start` 的 data 只有 `{turn, step}`，运行时工具名**无证据**，因此不投影（规则：拿不到证据就不猜字段） |
+| 其余 | `runId`/`serviceId`/`sessionId`/`sessionReused`/`task`/`workspace`/`webUrl`/`startedAt`/`lastEventSeq`/`assistantText`（键集以本表为准；**不写死数字**——快照键**没有**中英双向门禁，硬编码计数会静默漂移） |
 
 判读规则：**以 `status`/`reason` 为准，不要以"有没有 error 文本"判断失败**。`blocked`（回合被拒）与 `max-tokens`（输出被截断）都是 `failed`，不会伪装成 `succeeded`；`service-unreachable` 表示服务已死（用 `doctor` + 重新 `start_service` 恢复）；`protocol-drift` 表示 DSH 版本与适配层不匹配（**不要重试**，把方法与 JSON 路径报给维护者）；`cancelled` 是用户主动取消，不当失败上报。
 

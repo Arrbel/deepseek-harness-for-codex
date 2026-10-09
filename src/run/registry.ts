@@ -5,7 +5,7 @@
 // see the projected {@link RunSnapshot}.
 
 import { nextActionFor, webUrlStaleFor } from "./state.js";
-import type { FailureReason, RunSnapshot, RunStatus } from "./types.js";
+import type { FailureReason, RunProgress, RunSnapshot, RunStatus } from "./types.js";
 
 /** One run as this process tracks it. */
 export interface RunRecord {
@@ -27,16 +27,29 @@ export interface RunRecord {
   finishedAt: Date | null;
   assistantText: string;
   lastEventSeq: number;
+  /** Progress markers from the last event window (R3-5); `EMPTY_PROGRESS` until one is read. */
+  progress: RunProgress;
   /** True once `session/list` reported this session as running (fail-closed marker check). */
   sawRunningSession: boolean;
   error: string | null;
 }
 
+/** The progress of a run whose event window has not been read yet. */
+export const EMPTY_PROGRESS: RunProgress = { started: 0, finished: 0, current: null };
+
 /** Creates a fresh `running` record. */
 export function createRunRecord(
   init: Omit<
     RunRecord,
-    "status" | "settled" | "reason" | "cancelRequested" | "finishedAt" | "assistantText" | "error" | "sawRunningSession"
+    | "status"
+    | "settled"
+    | "reason"
+    | "cancelRequested"
+    | "finishedAt"
+    | "assistantText"
+    | "error"
+    | "sawRunningSession"
+    | "progress"
   > &
     Partial<Pick<RunRecord, "sawRunningSession">>,
 ): RunRecord {
@@ -48,6 +61,7 @@ export function createRunRecord(
     cancelRequested: false,
     finishedAt: null,
     assistantText: "",
+    progress: EMPTY_PROGRESS,
     sawRunningSession: init.sawRunningSession ?? false,
     error: null,
   };
@@ -131,6 +145,9 @@ export class RunRegistry {
       finishedAt: run.finishedAt?.toISOString() ?? null,
       assistantText: run.assistantText,
       lastEventSeq: run.lastEventSeq,
+      // Copied, not recomputed: the projection happens where the window is read, so a snapshot can
+      // never report progress the run never actually saw (R3-5).
+      progress: run.progress,
       error: run.error,
     };
   }

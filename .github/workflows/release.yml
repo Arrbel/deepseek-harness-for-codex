@@ -1,0 +1,87 @@
+name: release
+
+# R4-1: build the release artifacts, prove where they came from, and **stop there**.
+#
+# This repository does not publish to any registry. The distribution identity is still an open
+# decision (ADR-0001 / R4-2), and the published package name currently belongs to the upstream
+# project, so a registry upload from CI would either fail or squat on someone else's name.
+# The workflow therefore has exactly four jobs' worth of responsibilities in one job:
+# install → run the hermetic gate → pack → attest and upload the evidence.
+#
+# The "never publishes" property is not a comment: `tests/release/workflow.test.ts` parses this
+# file into a structure and asserts that no job's steps contain a publishing action, that the
+# trigger is a version tag rather than a branch push, that the provenance permissions are
+# present, and that no registry token is wired in. Keep that test in sync when editing here.
+#
+# Cost note: `npm run check` already builds `dist/` (and the plugin payload), so the pack step
+# uses `--ignore-scripts` to avoid running the whole gate a second time through `prepack`.
+
+on:
+  # A release candidate is cut by pushing a version tag (`v0.4.3`, …). A push to any branch does
+  # not reach this workflow, so no branch can produce a release artifact by accident.
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Required by actions/attest-build-provenance: it signs an in-toto statement with the
+  # workflow's OIDC identity and writes the attestation to the repository.
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    name: build, attest and upload (no registry upload)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Deliberately no registry endpoint or registry-auth option here: that would configure
+          # an authenticated registry for every later npm command, which is exactly the surface
+          # this workflow must not have.
+          node-version: "22.x"
+          cache: npm
+
+      - name: Install from the lockfile
+        run: npm ci
+
+      - name: Run the hermetic gate (typecheck, tests, metadata, build, self-contained probe)
+        run: npm run check
+
+      - name: Pack the tarball
+        run: npm pack --ignore-scripts
+
+      - name: Generate the CycloneDX SBOM
+        # Same entry point maintainers run locally (`npm run sbom`); it validates the document
+        # against package.json and fails loudly instead of writing a plausible-looking SBOM.
+        run: npm run sbom -- --out sbom.cdx.json
+
+      - name: Upload the tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarball
+          path: "*.tgz"
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload the CycloneDX SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Attest the build provenance of the tarball
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "*.tgz"

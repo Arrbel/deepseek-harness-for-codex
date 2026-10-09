@@ -8,7 +8,7 @@
 
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_HARNESS_PACKAGE,
@@ -54,7 +54,17 @@ describe("environment resolution", () => {
     expect(resolveStartupTimeoutMs({})).toBe(DEFAULT_STARTUP_TIMEOUT_MS);
     expect(DEFAULT_STARTUP_TIMEOUT_MS).toBe(180_000);
     expect(resolveDataDirectory({ DSH_MCP_DATA_DIR: "C:\\data" })).toBe("C:\\data");
-    expect(resolveAllowedRoots({ DSH_MCP_WORKSPACE_ROOTS: "C:\\a;C:\\b" })).toEqual(["C:\\a", "C:\\b"]);
+    // The list separator is the **host** one — `;` on Windows, `:` on POSIX (`resolve.ts` splits on
+    // `path.delimiter`). Hard-coding `;` here made this line assert a split the code cannot perform
+    // on the ubuntu/macOS CI columns (task-35 defect A).
+    //
+    // The entries themselves must be separator-free for the assertion to mean the same thing on
+    // both hosts: a Windows path such as `C:\a` *contains* the POSIX separator, so joining those
+    // with `delimiter` on ubuntu shreds them into `["C", "\a", …]`.
+    expect(resolveAllowedRoots({ DSH_MCP_WORKSPACE_ROOTS: ["/a", "/b"].join(delimiter) })).toEqual(["/a", "/b"]);
+    // …and the *other* platform's separator stays data on every host.
+    const other = delimiter === ";" ? ":" : ";";
+    expect(resolveAllowedRoots({ DSH_MCP_WORKSPACE_ROOTS: ["/a", "/b"].join(other) })).toEqual([`/a${other}/b`]);
   });
 
   it("honours overrides and rejects non-numeric budgets", () => {

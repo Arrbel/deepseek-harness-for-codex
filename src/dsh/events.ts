@@ -184,3 +184,90 @@ export function projectAssistantText(events: HistoryEvent[]): string {
   }
   return blocks.join("\n");
 }
+
+// --- step progress (R3-5) ------------------------------------------------------------------
+//
+// Evidence, and only evidence: `tests/fixtures/recorded/0.2.1/session-page.json` contains
+// `{"type":"step/start","seq":6,"time":…,"data":{"turn":1,"step":1}}` and the matching `step/end`
+// with the same pair. That pair is the *whole* progress vocabulary the recorded wire offers, so
+// the projection below reads nothing else.
+//
+// Two things were deliberately **not** projected, because the recording gives them no evidence on
+// this path (see `reports/r4-projection-and-polling.md` §3):
+//
+//   * **the tool name** — no tool-call event was recorded. The captured turn died with
+//     `MISSING_CREDENTIAL` before the model could call a tool, and `assistant/attempt.data.stream`
+//     holds a single `finish` frame. The only `tools` in the capture are *request-side tool
+//     definitions* (`request/context`, `session/title-llm-request`), which are payload, not progress.
+//   * **the step's wall-clock start (`event.time`)** — it *is* in the recording, but the client's
+//     response schema keeps only `{type, seq, data}` (`dsh/contract.ts`), so it never reaches this
+//     module. Projecting it would produce a field that is always empty.
+//
+// Everything here is a scalar copied from a recorded field; no free text and no payload value can
+// pass through, which is what keeps tool parameters out of the snapshot by construction.
+
+/** One `step/start` observed in the window. */
+export interface StepMarker {
+  /** `data.turn` of the `step/start`. */
+  readonly turn: number;
+  /** `data.step` of the `step/start`. */
+  readonly step: number;
+  /** `seq` of the opening event — what a caller uses as a cursor. */
+  readonly seq: number;
+}
+
+/** What the recorded step events say about a run's progress. */
+export interface StepProjection {
+  /** How many readable `step/start` events the window carried. */
+  readonly started: number;
+  /** How many readable `step/end` events the window carried. */
+  readonly finished: number;
+  /**
+   * The most recently opened step that no `step/end` has closed yet, or `null`.
+   *
+   * `null` while `started > finished` means the closing event named a different step (or was
+   * unreadable): the projection never guesses, so it reports nothing open rather than pairing
+   * mismatched events.
+   */
+  readonly current: StepMarker | null;
+}
+
+/** The projection of an empty window; the value a run starts from. */
+export const NO_STEP_PROGRESS: StepProjection = { started: 0, finished: 0, current: null };
+
+/** Reads `{turn, step}` off a `step/*` payload, or `null` when either is not a number. */
+function stepPairOf(data: unknown): { turn: number; step: number } | null {
+  if (typeof data !== "object" || data === null) return null;
+  const record = data as { turn?: unknown; step?: unknown };
+  if (typeof record.turn !== "number" || typeof record.step !== "number") return null;
+  return { turn: record.turn, step: record.step };
+}
+
+/**
+ * Projects `step/start` + `step/end` into "how many steps, and which one is open".
+ *
+ * The window is read in the order the client returns it (sequence order). An unreadable payload is
+ * skipped rather than counted, so a shape change shows up as *no* progress instead of as invented
+ * progress.
+ */
+export function projectStepProgress(events: readonly HistoryEvent[]): StepProjection {
+  const open = new Map<string, StepMarker>();
+  let started = 0;
+  let finished = 0;
+  for (const { event } of events) {
+    if (event.type !== "step/start" && event.type !== "step/end") continue;
+    const pair = stepPairOf(event.data);
+    if (pair === null) continue;
+    const key = `${String(pair.turn)}:${String(pair.step)}`;
+    if (event.type === "step/start") {
+      started += 1;
+      open.set(key, { turn: pair.turn, step: pair.step, seq: event.seq });
+    } else {
+      finished += 1;
+      open.delete(key);
+    }
+  }
+  let current: StepMarker | null = null;
+  for (const marker of open.values()) current = marker;
+  return { started, finished, current };
+}

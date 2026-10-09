@@ -48,12 +48,14 @@ describe("policy/paths", () => {
     const lower = resolve("/tmp/workspace");
 
     expect(samePath(upper, upper)).toBe(true);
-    if (process.platform === "win32") {
-      expect(samePath(upper, lower.toUpperCase())).toBe(true);
-      expect(samePath(upper, resolve("/tmp/other"))).toBe(false);
-    } else {
-      expect(samePath(upper, lower)).toBe(false);
-    }
+    // Explicit platforms (the helper takes one, so no `process.platform` override is needed):
+    // Windows (NTFS) and macOS (default APFS) fold; Linux does not.
+    expect(samePath(upper, lower, "win32")).toBe(true);
+    expect(samePath(upper, lower, "darwin")).toBe(true);
+    expect(samePath(upper, lower, "linux")).toBe(false);
+    expect(samePath(upper, resolve("/tmp/other"), "win32")).toBe(false);
+    // The default stays the host platform.
+    expect(samePath(upper, lower)).toBe(process.platform === "win32" || process.platform === "darwin");
   });
 });
 

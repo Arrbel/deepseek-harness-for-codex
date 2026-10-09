@@ -13,6 +13,7 @@
 //   * a live pid is only reclaimed when the OS reports a command line that proves it is ours.
 
 import { join, normalize } from "node:path";
+import { foldForComparison } from "./paths.js";
 
 /** The pidfile name inside one service home (`<dataDir>/services/<key>/dsh.pid`). */
 export const PID_FILE_NAME = "dsh.pid";
@@ -101,10 +102,19 @@ export function orphanState(input: { alive: boolean; owned: boolean | null }): O
   return input.owned === true ? "alive" : "unverified";
 }
 
-/** Normalizes a path or command line for ownership comparison (case-insensitive on Windows). */
+/**
+ * Normalizes a path or command line for ownership comparison.
+ *
+ * **`"win32-only"` folding is deliberate** (task-35 §3): a positive ownership verdict is what lets
+ * `supervisor.reapOrphan` *signal* the recorded pid (`supervisor.ts:542`). Folding on macOS would
+ * turn a case-variant command line into proof of ownership — i.e. it would **widen the kill
+ * surface**, the one direction that is not automatically safe. So macOS keeps today's
+ * case-sensitive verdict (consequence: it may report `unverified` instead of reaping) until the
+ * change is reviewed; `policy/paths.ts` holds the single folding rule for both directions.
+ */
 function canonical(value: string, platform: NodeJS.Platform): string {
   const slashed = normalize(value).replaceAll("\\", "/");
-  return platform === "win32" ? slashed.toLowerCase() : slashed;
+  return foldForComparison(slashed, platform, "win32-only");
 }
 
 /**

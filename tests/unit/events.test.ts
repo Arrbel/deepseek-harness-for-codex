@@ -5,9 +5,11 @@
 // used to be judged successful), and any kind DSH adds later fails closed.
 import { describe, expect, it } from "vitest";
 import {
+  NO_STEP_PROGRESS,
   lastTurnEndOutcome,
   lastTurnEndReason,
   projectAssistantText,
+  projectStepProgress,
   recordText,
   turnEndOutcome,
   type TurnEndContext,
@@ -217,5 +219,129 @@ describe("dsh/events recordText", () => {
     expect(recordText({ other: "ignored" })).toBeNull();
     expect(recordText(null)).toBeNull();
     expect(recordText(7)).toBeNull();
+  });
+});
+
+describe("dsh/events projectStepProgress (R3-5)", () => {
+  /** The exact shape `tests/fixtures/recorded/0.2.1/session-page.json` carries. */
+  function stepEvent(type: string, seq: number, data: unknown): HistoryEvent {
+    return { event: { type, seq, data } };
+  }
+
+  it("projects the pair the recording actually carries", () => {
+    const events = [
+      stepEvent("step/start", 6, { turn: 1, step: 1 }),
+      stepEvent("assistant/message", 7, { turn: 1, step: 1, message: { content: [] } }),
+      stepEvent("step/end", 17, { turn: 1, step: 1 }),
+    ];
+
+    expect(projectStepProgress(events)).toEqual({ started: 1, finished: 1, current: null });
+  });
+
+  it("reports the open step, and only the scalars it read", () => {
+    const projection = projectStepProgress([stepEvent("step/start", 6, { turn: 2, step: 3 })]);
+
+    expect(projection).toEqual({ started: 1, finished: 0, current: { turn: 2, step: 3, seq: 6 } });
+    // The marker is a *copy*, not a view onto the payload: three keys, nothing inherited.
+    expect(Object.keys(projection.current as object)).toEqual(["turn", "step", "seq"]);
+    expect(Object.keys(projection).sort()).toEqual(["current", "finished", "started"]);
+  });
+
+  it("keeps the most recent open step and drops the ones that closed", () => {
+    const events = [
+      stepEvent("step/start", 1, { turn: 1, step: 1 }),
+      stepEvent("step/end", 2, { turn: 1, step: 1 }),
+      stepEvent("step/start", 3, { turn: 1, step: 2 }),
+      stepEvent("step/start", 4, { turn: 1, step: 3 }),
+    ];
+
+    expect(projectStepProgress(events)).toEqual({ started: 3, finished: 1, current: { turn: 1, step: 3, seq: 4 } });
+  });
+
+  it("never pairs mismatched events: an `end` for another step closes nothing", () => {
+    const events = [
+      stepEvent("step/start", 1, { turn: 1, step: 1 }),
+      stepEvent("step/end", 2, { turn: 2, step: 9 }),
+    ];
+
+    const projection = projectStepProgress(events);
+    expect(projection.current).toEqual({ turn: 1, step: 1, seq: 1 });
+    expect(projection.started).toBe(1);
+    expect(projection.finished).toBe(1);
+  });
+
+  it("counts nothing it cannot read instead of inventing progress", () => {
+    const events = [
+      stepEvent("step/start", 1, { step: 1 }),
+      stepEvent("step/start", 2, { turn: 1 }),
+      stepEvent("step/start", 3, { turn: "1", step: "1" }),
+      stepEvent("step/start", 4, null),
+      stepEvent("step/start", 5, "step one"),
+      stepEvent("step/start", 6, [1, 1]),
+      stepEvent("step/start", 7, undefined),
+    ];
+
+    expect(projectStepProgress(events)).toEqual({ started: 0, finished: 0, current: null });
+    expect(projectStepProgress([])).toEqual(NO_STEP_PROGRESS);
+  });
+
+  it("does not assume the step numbers are integers — the wire only promises numbers", () => {
+    // `dsh/contract.ts` types both as `z.number()`, so a fractional pair is *readable* and counts.
+    const projection = projectStepProgress([stepEvent("step/start", 7, { turn: 1, step: 1.5 })]);
+    expect(projection).toEqual({ started: 1, finished: 0, current: { turn: 1, step: 1.5, seq: 7 } });
+  });
+
+  it("ignores every event type that is not a step boundary", () => {
+    const events = [
+      stepEvent("turn/start", 1, { turn: 1, step: 1 }),
+      stepEvent("request/header", 2, { turn: 1, step: 1 }),
+      stepEvent("system/message", 3, { turn: 1, step: 1 }),
+      stepEvent("turn/end", 4, { turn: 1, step: 1, reason: { kind: "completed" } }),
+    ];
+
+    expect(projectStepProgress(events)).toEqual(NO_STEP_PROGRESS);
+  });
+
+  it("keeps tool parameters, commands, and output out of the projection", () => {
+    // The payload a tool-calling step would carry: name, arguments, the command line, and output.
+    // `step/start` is a shape this project *has* recorded, so this is what "a step whose payload
+    // got richer" would look like — and the projection must still be three scalars.
+    const payload = {
+      turn: 1,
+      step: 4,
+      tool: "bash",
+      toolName: "bash",
+      command: "SECRET-COMMAND-rm-rf",
+      args: { path: "SECRET-ARG-PATH" },
+      arguments: "SECRET-ARGUMENTS",
+      output: "SECRET-TOOL-OUTPUT",
+      result: { stdout: "SECRET-STDOUT" },
+      prompt: "SECRET-PROMPT-TEXT",
+      description: "SECRET-TOOL-DESCRIPTION",
+    };
+    const events = [stepEvent("step/start", 6, payload), stepEvent("step/end", 9, payload)];
+
+    const projection = projectStepProgress(events);
+    expect(projection).toEqual({ started: 1, finished: 1, current: null });
+
+    const serialized = JSON.stringify(projection);
+    for (const secret of [
+      "SECRET-COMMAND-rm-rf",
+      "SECRET-ARG-PATH",
+      "SECRET-ARGUMENTS",
+      "SECRET-TOOL-OUTPUT",
+      "SECRET-STDOUT",
+      "SECRET-PROMPT-TEXT",
+      "SECRET-TOOL-DESCRIPTION",
+      "bash",
+    ]) {
+      expect(serialized, secret).not.toContain(secret);
+    }
+    // Not a whitelist-by-luck check: the marker that *is* projected exposes three scalars, so
+    // there is no field for a parameter to travel in.
+    expect(Object.keys(projection.current ?? {})).toEqual([]);
+    expect(Object.values(projectStepProgress([stepEvent("step/start", 6, payload)]).current ?? {}).every(
+      (value) => typeof value === "number",
+    )).toBe(true);
   });
 });
